@@ -20,7 +20,7 @@ You are also the foundation of the data: cities, zones, customers, restaurants a
 | **MongoDB** | `export_reports.py`, `report_orders` and `report_offers` collections, pipelines 1 and 5 |
 | **Concurrency** | The shared `tests/concurrency/run.py` (arguments, counting, output, exit code) |
 | **Seed** | Cities, zones, fees, customers, addresses, restaurants, hours, menu, ratings. **The first PG seed to run.** |
-| **Docs** | `docs/architecture.md`, `docs/mongodb.md`, the `EXPLAIN` for query 1 in `postgres.md`, MongoDB runbook |
+| **Docs** | `docs/architecture.md`, `docs/mongodb.md`, the `EXPLAIN` for query 1 in `postgres.md`, MongoDB runbook, your `ai-usage.md` entries |
 
 ---
 
@@ -91,8 +91,9 @@ A Pydantic model validates this shape. B uses it to compute prices. In `mongodb.
 - ✅ **Done when:** changing a restaurant's hours makes it disappear from the list.
 
 ### Step 5 — F6: tracking from Redis
-- Function `update_tracking(order_id, status, courier_id)`, called by A and B after each commit: `HSET fd:order:{id}:track ...` + `EXPIRE` in the same `MULTI`.
-- `GET /customers/{id}/orders/{order_id}/track`: read the hash; if there is a courier, `GEOPOS fd:couriers:geo {courier_id}` for the position. If the key does not exist, read PG once and store it.
+- Function `update_tracking(order_id, customer_id, status, courier_id)`, called by A and B after each commit: `HSET fd:order:{id}:track ...` + `EXPIRE` in the same `MULTI`. The hash stores the **`customer_id`** too.
+- `GET /customers/{id}/orders/{order_id}/track`: read the hash; check that its `customer_id` is the one in the path (otherwise 404); if there is a courier, `GEOPOS fd:couriers:geo {courier_id}` for the position. If the key does not exist, read PG once and store it.
+- **Trap:** do not check "is this the customer's order?" with a `SELECT` in PostgreSQL. That would make every repeated request hit PG and break the "read from Redis" rule. The check uses the `customer_id` in the hash.
 - **Evidence:** turn on `log_statement = 'all'` in PG (A leaves a switch for it in `compose.yml`), run `MONITOR` in `redis-cli`, make the same request twice, and paste both logs into `redis.md` (give them to A, who writes that file).
 - ✅ **Done when:** the second request shows up in `MONITOR` and nothing shows up in the PostgreSQL log.
 
@@ -136,7 +137,13 @@ A Pydantic model validates this shape. B uses it to compute prices. In `mongodb.
 - `docs/architecture.md`: source-of-truth table (each kind of data, owning engine, copies, which wins, what is lost), a Mermaid sequence diagram for F2, F4 and F6, what happens if the second write fails, how time-based state is handled (stock at midnight, 45 s offers, 30 s presence, 7-day TTL), security section (roles and users).
 - `docs/mongodb.md`: each collection (why Mongo, truth or derived, example, validator, embed or reference), the options decision, the export, the 3 pipelines with output.
 - `docs/postgres.md` (B owns it): your tables and constraints, and the `EXPLAIN (ANALYZE, BUFFERS)` without and with the index for query 1. The trick is `BEGIN; DROP INDEX ...; EXPLAIN ...; ROLLBACK;`.
-- `docs/runbook.md`: the MongoDB section (`mongodump`/`mongorestore`; report collections are rebuilt with the export; positions are lost, but they are only 7 days of history).
+- `docs/runbook.md`: the MongoDB section, with the 5 points the README asks for:
+  1. what is backed up, how often, with which tool and where (`mongodump` of `courier_positions`; the report collections are not backed up, they are rebuilt with the export);
+  2. the exact commands, in order (`mongodump` / `mongorestore`, then `uv run python mongodb/setup.py` for validators and indexes, then `uv run python mongodb/export_reports.py`);
+  3. how you verify it (document counts, one pipeline run, `getIndexes()` shows the TTL);
+  4. RTO and RPO, justified by the business (the trail is only history for 7 days; reports can be regenerated);
+  5. what is lost for good (positions since the last dump) and whether the business can live with it.
+- `docs/ai-usage.md`: your entries (Who, Tool, For what, Outcome, Verification, Mistakes caught).
 - `README.md`: the ER diagram in Mermaid (everyone helps).
 
 ---

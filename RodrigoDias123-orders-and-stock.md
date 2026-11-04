@@ -18,7 +18,7 @@ You own the life of an order: it is born in your code (F2), goes through the kit
 | **App** | F2 (place order) real and naive; all of F5: preparing, ready, picked_up, delivered, cancel; the function that gives stock back |
 | **Redis** | The stock key `fd:stock:{item_id}:{date}` and its part in `rebuild.py` and `verify.py` |
 | **MongoDB** | Pipeline 4: cancellations by reason and by who cancelled (+ its fields in the `report_orders` validator) |
-| **Concurrency** | The **last portions** scenario (60 customers, 30 portions) + rule 4 (kitchen capacity) if there is time |
+| **Concurrency** | The **last portions** scenario (60 customers, 30 portions); the kitchen capacity check (mandatory); the rule 4 test scenario if there is time |
 | **Seed** | Orders, lines, payments, history, stock |
 | **Docs** | Owner of `docs/postgres.md` and `docs/concurrency.md` (you collect A's and C's sections), PostgreSQL runbook |
 
@@ -105,7 +105,7 @@ With `?mode=naive` (and only if `ENABLE_NAIVE_MODE=true`): **read** the stock wi
 
 ### Step 6 — F5: restaurant side and cancel
 - `POST /restaurants/{id}/orders/{order_id}/preparing` and `/ready`.
-- `POST /customers/{id}/orders/{order_id}/cancel` and `POST /restaurants/{id}/orders/{order_id}/cancel`, with a reason.
+- `POST /customers/{id}/orders/{order_id}/cancel`, `POST /restaurants/{id}/orders/{order_id}/cancel` and `POST /backoffice/orders/{order_id}/cancel`, with a reason. The history records who cancelled (customer, restaurant or back office); pipeline 4 groups by it.
 - Each one: `SELECT ... FOR UPDATE` on the order, check the transition is allowed (otherwise 409), update, insert into the history, update tracking.
 - Cancel and reject **give the stock back**. If paid by card or MB WAY, insert a `refunded` payment with the same amount. Write this as a function A calls when the restaurant rejects.
 - If there was already a courier, their delivery stops being active. Agree with A how that is marked in `deliveries`.
@@ -136,13 +136,23 @@ In `tests/concurrency/` (the shared script is C's; you write your scenario):
 - File in `mongodb/pipelines/`.
 - ✅ **Done when:** the pipeline runs and you have a sample output for `mongodb.md`.
 
-### Step 11 — Extension (if there is time): kitchen capacity (rule 4)
-In F3 accept (A's code): `SELECT ... FROM restaurants WHERE id = :r FOR UPDATE`, count orders in `accepted`/`preparing`/`ready`, refuse with 409 if it reached `kitchen_capacity`. Agree with A where it goes, and add a scenario to `run.py`.
+### Step 11 — Kitchen capacity (rule 4, mandatory)
+The brief says a restaurant **cannot** accept an order when it already has as many orders in `accepted`/`preparing`/`ready` as its kitchen capacity. Applying it is mandatory; only its test scenario is an extension.
+- Write a function A calls inside F3 accept: `SELECT ... FROM restaurants WHERE id = :r FOR UPDATE`, count the restaurant's orders in `accepted`/`preparing`/`ready`, raise 409 if it reached `kitchen_capacity`.
+- The lock on the restaurant row makes two accepts for the same restaurant queue up, so they cannot both see "one slot left".
+- Say in `postgres.md` that this rule is enforced in the app, and why.
+- ✅ **Done when:** a restaurant with capacity 2 and 2 orders in preparation gets 409 on a third accept.
+- *(extension)* Add a rule 4 scenario to `run.py`, with naive and real modes.
 
 ### Step 12 — Documentation (English)
 - `docs/postgres.md` (**you own it**): every table and what it represents, every constraint and index with the rule or query it serves, both lists from "Where the rules are enforced" with how and where each rule is enforced, denormalisations (the address and price snapshots), the 3 `EXPLAIN` (you do 2 and 3; C does 1; A does 4), indexed and non-indexed FKs. A writes the roles section.
 - `docs/concurrency.md` (**you own it**): isolation level, your conditional `UPDATE`, why the naive version breaks, your 6 outputs; A adds the F4 section and his 6 outputs.
-- `docs/runbook.md`: the PostgreSQL section (backup with `pg_dump` or continuous, commands, RTO/RPO). Justification example: losing payments is serious, so the RPO must be small.
+- `docs/runbook.md`: the PostgreSQL section, with the 5 points the README asks for:
+  1. what is backed up, how often, with which tool and where (for example `pg_dump` daily plus WAL archiving, or `pg_basebackup`);
+  2. the exact backup and restore commands, in order (restoring as the owner role, then re-running grants if needed);
+  3. how you verify it (row counts per table, a known query, the app's `/health`);
+  4. RTO and RPO, justified by the business: losing payments means customers who paid with no record of it, so the RPO must be small, which a daily `pg_dump` alone cannot meet;
+  5. what is lost for good, and that PostgreSQL is the source of truth, so Mongo reports and Redis keys are rebuilt from it afterwards.
 - `docs/ai-usage.md`: your entries.
 
 ---
@@ -162,6 +172,7 @@ In F3 accept (A's code): `SELECT ... FROM restaurants WHERE id = :r FOR UPDATE`,
 | Working F2 | A | For the restaurant to accept and create offers |
 | `orders` table | A | FKs of `delivery_offers` and `deliveries` |
 | Function that gives stock back | A | When the restaurant rejects |
+| Kitchen capacity check | A | Called inside F3 accept |
 | Shared transition check | A | `placed → accepted/rejected` in F3 |
 | Orders seed | A and C | Offers, deliveries and ratings seed |
 

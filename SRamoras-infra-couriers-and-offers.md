@@ -21,9 +21,9 @@ You have the two hardest jobs in the project.
 | **PostgreSQL** | `alembic.ini`, `migrations/env.py`, the grants migration; tables `couriers`, `delivery_offers`, `deliveries` |
 | **MongoDB** | `mongodb/setup.py` base (app user, `ensure_collection` helper the others reuse); the `courier_positions` collection with its 7-day TTL |
 | **Redis** | `redis/rebuild.py` and `redis/verify.py` skeletons; `fd:couriers:geo`, `fd:courier:{id}:online`, `fd:offer:{id}`; the position Lua script |
-| **Concurrency** | The **same order** scenario (50 couriers, 1 order) + rule 3 (vehicle limit) if there is time |
+| **Concurrency** | The **same order** scenario (50 couriers, 1 order); the vehicle limit enforced in F4 (mandatory); the rule 3 test scenario if there is time |
 | **Seed** | `seed.sh` orchestration + couriers, offers, deliveries, ≥50k positions in Mongo |
-| **Docs** | README "how to run" section, `docs/redis.md` (all keys), your half of `concurrency.md`, Redis runbook |
+| **Docs** | README "how to run" section, `docs/redis.md` (all keys), your half of `concurrency.md`, Redis runbook, your `ai-usage.md` entries |
 
 Careful: files in the root and in `scripts/` **count for no area**. That is why your slice also has real work in `app/`, `postgres/`, `mongodb/` and `redis/`.
 
@@ -54,6 +54,29 @@ This is "least privilege": if the app has a bug or an injection, it still cannot
 ### 4. The trainer only has Docker and uv
 Every command in the README must work with only those two. No `psql` installed on the host: use `docker compose exec postgres psql ...` inside scripts. Python scripts run with `uv run`.
 
+## Step I-0 — `.gitignore` (do this before anything else)
+The repo has no `.gitignore` yet, and everyone already has a local `.env`. Without it, the first `git add .` puts the passwords on GitHub, and a password committed once counts forever, even if a later commit removes it. So this is the **first commit**, before any code.
+
+Create `.gitignore` in the repo root:
+```
+# secrets
+.env
+
+# python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# tools
+.pytest_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+```
+Do **not** ignore `.env.example`, `uv.lock` or `.devcontainer/`: those must be in Git.
+- ✅ **Done when:** `git status` no longer shows `.env`, and `git check-ignore -v .env` prints the `.gitignore` line that ignores it. Tell B and C to `git pull` straight away.
+
 ## Step I-1 — `compose.yml`
 - First line: `name: food-delivery`, so the project name is the same from the host and from the dev container.
 - Services: `postgres` (official image), `mongo` (official image, root user from `.env`), `redis` (with `--requirepass ${REDIS_PASSWORD}`), `api` (built from your `Dockerfile`).
@@ -66,9 +89,8 @@ Every command in the README must work with only those two. No `psql` installed o
 - `dbgate` in profile `tools` (the snippet is in `CLAUDE.md`).
 - ✅ **Done when:** `docker compose up -d` starts everything, the three databases show `healthy`, and DbGate does **not** start unless you pass `--profile tools`.
 
-## Step I-2 — `.env.example`, `.gitignore`, `pyproject.toml`, `Dockerfile`
+## Step I-2 — `.env.example`, `pyproject.toml`, `Dockerfile`
 - `.env.example` with **every** variable from `CLAUDE.md`, all with `CHANGE_ME`.
-- `.gitignore`: `.env`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`.
 - `uv init`, then the `uv add` commands from `CLAUDE.md`. Commit `uv.lock`.
 - `Dockerfile` based on a uv Python 3.12 image: copy `pyproject.toml` + `uv.lock`, `uv sync --frozen`, copy the code, run `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
 - ✅ **Done when:** `git status` never shows `.env`, and the `api` image builds.
@@ -116,15 +138,73 @@ Use `set -euo pipefail` so it stops at the first error.
 - ✅ **Done when:** from a clean clone, `cp .env.example .env && docker compose up -d && ./scripts/setup.sh && ./scripts/seed.sh` runs end to end (even with an almost empty seed).
 
 ## Step I-8 — Dev container (optional, for the group)
-`.devcontainer/devcontainer.json` and `.devcontainer/compose.devcontainer.yml` are already written. They add a `workspace` container (Python 3.12, uv, Docker CLI, editor extensions) next to the three databases. Your job is to make them work with your `compose.yml`:
+The dev container is **not in the repo yet**. Create a `.devcontainer/` folder in the repo root with two files. They add a `workspace` container (Python 3.12, uv, Docker CLI, editor extensions) next to the three databases, so the three of you have the same environment without installing anything.
+
+`.devcontainer/devcontainer.json`:
+```jsonc
+{
+  "name": "Food delivery",
+  // the project's compose.yml + the extra "workspace" service below
+  "dockerComposeFile": ["../compose.yml", "compose.devcontainer.yml"],
+  "service": "workspace",
+  // databases + workspace; not "api" (run uvicorn in the workspace) and not "dbgate" (profile tools)
+  "runServices": ["postgres", "mongo", "redis", "workspace"],
+  "shutdownAction": "stopCompose",
+  "workspaceFolder": "/workspaces/food-delivery",
+  // Docker CLI inside, talking to the host's Docker: setup.sh and seed.sh use "docker compose exec"
+  "features": { "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {} },
+  "containerEnv": { "UV_LINK_MODE": "copy" },
+  "postCreateCommand": "pip install --user uv && uv sync",
+  "forwardPorts": [8000, 3000],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "ms-azuretools.vscode-docker",
+        "mongodb.mongodb-vscode",
+        "anthropic.claude-code"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python"
+      }
+    }
+  }
+}
+```
+
+`.devcontainer/compose.devcontainer.yml` (paths are relative to the **first** compose file, the repo root; `${...}` comes from the root `.env`; inside Docker the databases are reached by service name, not `127.0.0.1`):
+```yaml
+services:
+  workspace:
+    image: mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
+    command: sleep infinity
+    volumes:
+      - .:/workspaces/food-delivery:cached
+    depends_on:
+      postgres: { condition: service_healthy }
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      POSTGRES_SUPERUSER_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres
+      MIGRATION_DATABASE_URL: postgresql+psycopg://fd_owner:${FD_OWNER_PASSWORD}@postgres:5432/food_delivery
+      DATABASE_URL: postgresql+psycopg://fd_app:${FD_APP_PASSWORD}@postgres:5432/food_delivery
+      READONLY_DATABASE_URL: postgresql+psycopg://fd_readonly:${FD_READONLY_PASSWORD}@postgres:5432/food_delivery
+      MONGO_ROOT_URL: mongodb://root:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+      MONGO_URL: mongodb://fd_app:${MONGO_APP_PASSWORD}@mongo:27017/food_delivery?authSource=food_delivery
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+```
+
+To make it work with your `compose.yml`:
 - the three databases need **healthchecks** (the workspace waits for them);
-- the variable names in `compose.devcontainer.yml` must match your `.env.example`;
+- `compose.yml` starts with `name: food-delivery` (step I-1);
+- the variable names above must match your `.env.example`;
 - test it: VS Code → "Dev Containers: Reopen in Container" → in the terminal, `./scripts/setup.sh`, `./scripts/seed.sh`, `uv run uvicorn app.main:app --host 0.0.0.0 --reload` → `http://127.0.0.1:8000/docs` opens.
 - Nothing may depend on it: the README commands on the host must keep working without it.
 - ✅ **Done when:** B and C can open the repo in the dev container and run the API without installing anything else.
 
 ## Step I-9 — README "how to run"
-Write the clean-clone section of `README.md`: the 4 commands, the concurrency test command, the DbGate note, the optional dev container, and the stack with the reason. Keep it updated as the project grows.
+Write the clean-clone section of `README.md`: first "stop the module environment (`docker compose down` in the module repo), because it uses the same ports", then the 4 commands, the concurrency test command, the DbGate note, the optional dev container, and the stack with the reason. Keep it updated as the project grows.
 
 ---
 
@@ -180,7 +260,7 @@ You do not need anything running every second to mark offers as expired. An offe
 
 ## Step C-5 — F3: restaurant accepts, rejects, reoffers
 - `POST /restaurants/{id}/orders/{order_id}/accept`:
-  1. In the transaction: `FOR UPDATE` on the order, must be `placed`, becomes `accepted`, history. (If B does the kitchen capacity extension, it goes here.)
+  1. In the transaction: `FOR UPDATE` on the order, must be `placed`; call B's **kitchen capacity** check (it locks the restaurant row and returns 409 when the kitchen is full; mandatory); becomes `accepted`, history.
   2. `GEOSEARCH` 3 km around the restaurant → keep those with `fd:courier:{id}:online` → keep in PG those who still have room (bicycle 1, scooter 2, car 3) → the first 5.
   3. Insert the offers in PG (`pending`) and `fd:offer:{id}` in Redis with `EX 45`.
 - `POST .../reject`: `placed → rejected` (giving the stock back is B's function; call it).
@@ -191,9 +271,11 @@ You do not need anything running every second to mark offers as expired. An offe
 `POST /couriers/{id}/offers/{offer_id}/accept`, with the transaction from idea 4:
 - Offer is not this courier's → 404.
 - Offer not `pending`, or 45 s passed, or the order already has a courier → 409 (and mark it `expired` if that is the case).
+- **Vehicle limit (mandatory):** `SELECT ... FROM couriers WHERE id = :c FOR UPDATE`, count their active deliveries (accepted, not yet delivered or cancelled); bicycle 1, scooter 2, car 3; full → 409. F3 already filtered by room, but the courier may have accepted another offer since, so F4 checks again.
 - Otherwise: insert the delivery, offer `accepted`, the others `withdrawn`, delete that order's `fd:offer:*` keys, update tracking (C's function).
 - Catch the unique's `IntegrityError` and return 409, never 500.
-- ✅ **Done when:** two couriers accepting the same order get one 200 and one 409.
+- **Decline:** `POST /couriers/{id}/offers/{offer_id}/reject` → outcome `rejected` (only if still `pending`), delete `fd:offer:{id}`.
+- ✅ **Done when:** two couriers accepting the same order get one 200 and one 409, and a bicycle with one active delivery gets 409 on a second offer.
 
 ## Step C-7 — F4 naive version
 With `?mode=naive` (and only if `ENABLE_NAIVE_MODE=true`): read whether the order has a courier, check in Python, and insert. No `FOR UPDATE`.
@@ -214,15 +296,21 @@ With `?mode=naive` (and only if `ENABLE_NAIVE_MODE=true`): read whether the orde
 - Runs after B's seed (you need the orders).
 - ✅ **Done when:** correct counts and no constraint turned off.
 
-## Step C-10 — Extension (if there is time): vehicle limit (rule 3)
-A scooter with 1 delivery accepts two offers at the same time, and both requests see "1 < 2"; it ends up with 3 deliveries. This is a **write skew**: each request writes to a different row, so there is no direct conflict between them. Fix: `SELECT ... FROM couriers WHERE id = :c FOR UPDATE` before counting active deliveries. Now the two requests queue up. Add it as a third scenario in `run.py`.
+## Step C-10 — Extension (if there is time): rule 3 test scenario
+The vehicle limit itself is mandatory and already in step C-6. The extension is **proving** it under concurrency. Without the lock: a scooter with 1 delivery accepts two offers at the same time, both requests see "1 < 2", and it ends up with 3 deliveries. This is a **write skew**: each request writes to a different row, so there is no direct conflict between them. The `FOR UPDATE` on the courier makes the two requests queue up. Add it as a third scenario in `run.py`, with naive and real modes.
 
 ## Step C-11 — Documentation (English)
 - `README.md`: the "how to run" section (from Part 1).
 - `docs/redis.md`: **every** key in the project (yours, plus B's stock and C's tracking and ranking, who give you the details): structure, example, TTL and why, commands, class (truth, derived or ephemeral). The persistence and memory settings. The cache evidence that C produces.
 - `docs/concurrency.md`: the F4 mechanism and 6 outputs (same order, 2 modes × 3 runs). B owns the file; you write your section.
 - `docs/postgres.md`: your tables, the roles and grants, and the `EXPLAIN` for query 4. B owns the file; you write your section.
-- `docs/runbook.md`: the Redis section. Defend whether you back it up or only rebuild: positions and pending offers are ephemeral; stock and tracking are rebuilt from PG and Mongo.
+- `docs/runbook.md`: the Redis section, with the 5 points the README asks for:
+  1. what is backed up, how often, with which tool and where, or why you only rebuild (positions and pending offers are ephemeral; stock, tracking and ranking are rebuilt from PG);
+  2. the exact commands, in order (for example the RDB/AOF copy, or `FLUSHALL` → `uv run python redis/rebuild.py`);
+  3. how you verify it (`uv run python redis/verify.py` exits 0);
+  4. RTO and RPO, justified by the business;
+  5. what is lost for good (current positions and pending offers, recovered within seconds as couriers send positions).
+- `docs/ai-usage.md`: your entries (Who, Tool, For what, Outcome, Verification, Mistakes caught).
 
 ---
 
@@ -232,6 +320,7 @@ A scooter with 1 delivery accepts two offers at the same time, and both requests
 |---|---|---|
 | `orders` table and working F2 | B | Steps C-4 and C-5 |
 | Function that gives stock back on reject | B | Step C-5 |
+| Kitchen capacity check | B | Step C-5 (F3 accept) |
 | Restaurant coordinates | C | Step C-5 (centre of the 3 km search) |
 | Tracking function | C | Step C-6 |
 | Details of their Redis keys | B and C | `redis.md` |

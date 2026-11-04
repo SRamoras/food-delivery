@@ -15,8 +15,10 @@ The technical focus is **concurrency**. These rules must hold under simultaneous
 
 1. An order is assigned to exactly one courier.
 2. An item's daily stock never goes below zero.
-3. A courier never has more active deliveries than the vehicle allows (bicycle 1, scooter 2, car 3). Extension; this is a write skew.
-4. A restaurant never has more orders in preparation than its kitchen capacity. Extension.
+3. A courier never has more active deliveries than the vehicle allows (bicycle 1, scooter 2, car 3). This is a write skew.
+4. A restaurant never has more orders in preparation than its kitchen capacity.
+
+**All four rules must be enforced** (rules 3 and 4 are in the brief's "may be enforced in PostgreSQL or in the app" list: the app is allowed, skipping them is not). The concurrency **test scenarios** are mandatory for rules 1 and 2; scenarios for rules 3 and 4 are the extension.
 
 ## Who owns what
 
@@ -69,7 +71,8 @@ compose.yml                   postgres, mongo, redis, api (+ dbgate in profile t
 .devcontainer/                optional dev environment (VS Code / Codespaces): devcontainer.json + compose.devcontainer.yml
 Dockerfile                    api image, built with uv
 pyproject.toml / uv.lock
-.env.example                  placeholders only; .env is in .gitignore
+.env.example                  placeholders only
+.gitignore                    .env, .venv/, __pycache__/, *.pyc, .pytest_cache/, .ruff_cache/, .DS_Store
 README.md
 CLAUDE.md
 PLAN.md, <github-user>-*.md   internal group planning (not graded docs)
@@ -236,7 +239,7 @@ Service in `compose.yml`:
 
 ### General
 - **Every query is parameterised.** SQLAlchemy expressions, or `text("... :param")` with bound parameters. MongoDB filters are dicts built from typed values. **Never** f-strings or string concatenation with request input, in SQL, Mongo, or Redis keys built from unvalidated strings.
-- **No secrets in Git.** Everything sensitive comes from `Settings`. A password committed once counts forever.
+- **No secrets in Git.** Everything sensitive comes from `Settings`. A password committed once counts forever. Never remove `.env` from `.gitignore`, never `git add -f .env`, and check `git status` before every commit.
 - The app connects as `fd_app` (PG), the `readWrite` Mongo user and with the Redis password. Never as `postgres` or `root`.
 - **Time:** `from zoneinfo import ZoneInfo; LISBON = ZoneInfo("Europe/Lisbon")`. "Today", day of week, opening hours and the midnight stock reset use Lisbon time. Store moments as `timestamptz` and keep Python datetimes timezone-aware (never naive `datetime.now()`).
 - **Money:** `Decimal` in Python, `numeric(10,2)` in PG. Never `float`.
@@ -322,6 +325,9 @@ The place-order body has `simulate: "approved" | "declined"`. If declined, nothi
 - Offers live in PG (record and outcome) **and** in Redis (`fd:offer:{offer_id}` with `EX 45`).
 - An offer is valid if PG says `pending` and its `sent_at` is less than 45 s ago. Offers are marked `expired` lazily, when read or when the order is offered again.
 - First valid accept wins; all other offers for that order become `withdrawn` in the same transaction. Accepting an expired, withdrawn or taken offer → 409.
+- F4 also re-checks the **vehicle limit** with the courier row locked (`FOR UPDATE`): a courier with no room left → 409. F3 filtering by room is not enough, because the courier may have accepted another offer since.
+- F3 accept checks the **kitchen capacity** with the restaurant row locked (`FOR UPDATE`): restaurant full → 409.
+- A courier can decline an offer: `POST /couriers/{courier_id}/offers/{offer_id}/reject` → outcome `rejected`.
 - `POST /restaurants/{restaurant_id}/orders/{order_id}/reoffer` and `POST /backoffice/orders/{order_id}/reoffer` offer the order to the next couriers (not already offered). No worker.
 
 ---
@@ -339,7 +345,7 @@ The place-order body has `simulate: "approved" | "declined"`. If declined, nothi
 | Rule 4 (kitchen capacity) | Lock the restaurant row `FOR UPDATE` before counting orders in `accepted`/`preparing`/`ready` | `docs/concurrency.md` |
 | Isolation level | `READ COMMITTED` + explicit row locks / conditional updates | `docs/concurrency.md` |
 | Naive mode | Same endpoints with `?mode=naive` (only when `ENABLE_NAIVE_MODE=true`): read-check-write with no locks, to show the race | `docs/concurrency.md` |
-| F6 tracking | `fd:order:{id}:track` hash (status, courier_id, updated_at), written whenever the status changes (after PG commits); courier position from the geo set. Cache miss → read PG once and fill the key | `docs/redis.md` |
+| F6 tracking | `fd:order:{id}:track` hash (customer_id, status, courier_id, updated_at), written whenever the status changes (after PG commits); courier position from the geo set. The ownership check (is this the customer's order?) compares with the `customer_id` **in the hash**, never in PG. Cache miss → read PG once and fill the key | `docs/redis.md` |
 | Ranking | Per-city, per-minute sorted-set buckets `fd:rank:{city_id}:{yyyymmddHHMM}` (`ZINCRBY`, `EX 3900` in the same `MULTI`), `ZUNION` of the last 60 buckets, top 20 | `docs/redis.md` |
 
 ### Redis key patterns (starting point)
@@ -383,8 +389,8 @@ Report pipelines to implement (at least 3 of the brief's 6): **1** delivery time
 | F1 Browse | `GET /customers/{id}/addresses/{address_id}/restaurants` (open now, delivers to the zone, fee, avg rating); `GET /restaurants/{id}/menu` |
 | F2 Place order | `POST /customers/{id}/orders` |
 | F3 Accept / reject / reoffer | `POST /restaurants/{id}/orders/{order_id}/accept`, `.../reject`, `.../reoffer` |
-| F4 Courier accepts | `POST /couriers/{id}/offers/{offer_id}/accept` |
-| F5 Status updates | `POST /restaurants/{id}/orders/{order_id}/preparing`, `.../ready`; `POST /couriers/{id}/deliveries/{order_id}/picked-up`, `.../delivered`; `POST /customers/{id}/orders/{order_id}/cancel`, `POST /restaurants/{id}/orders/{order_id}/cancel` |
+| F4 Courier accepts | `POST /couriers/{id}/offers/{offer_id}/accept`; decline: `POST /couriers/{id}/offers/{offer_id}/reject` |
+| F5 Status updates | `POST /restaurants/{id}/orders/{order_id}/preparing`, `.../ready`; `POST /couriers/{id}/deliveries/{order_id}/picked-up`, `.../delivered`; `POST /customers/{id}/orders/{order_id}/cancel`, `POST /restaurants/{id}/orders/{order_id}/cancel`, `POST /backoffice/orders/{order_id}/cancel` |
 | F6 Track | `GET /customers/{id}/orders/{order_id}/track` (Redis only on repeat) |
 | F7 Location | `POST /couriers/{id}/online`, `POST /couriers/{id}/position`, `POST /couriers/{id}/offline` |
 | F8 Reports | `GET /backoffice/reports/{report_name}` |

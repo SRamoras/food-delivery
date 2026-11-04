@@ -31,7 +31,7 @@ It is not one of the graded documents in `docs/`, and commits to it do not count
 | **PostgreSQL** | Grants migration, `couriers`, `delivery_offers`, `deliveries` | `daily_stock`, `orders`, `order_lines`, `payments`, `order_status_history` | `cities`, `zones`, `zone_fees`, `customers`, `customer_addresses`, `restaurants`, cuisines, opening hours, menu, `ratings` |
 | **MongoDB** | `setup.py` base (user, `ensure_collection` helper), `courier_positions` collection + TTL | Pipeline 4 (cancellations) | `export_reports.py`, report collections, pipelines 1 (delivery time) and 5 (restaurant times) |
 | **Redis** | `redis/` skeletons (rebuild, verify), `fd:couriers:geo`, `fd:courier:*:online`, `fd:offer:*`, position Lua script | `fd:stock:*` | `fd:order:*:track`, `fd:rank:*` |
-| **Concurrency** | **Same order** scenario (+ rule 3 if there is time) | **Last portions** scenario (+ rule 4 if there is time) | Shared `tests/concurrency/run.py` (output, exit codes) |
+| **Concurrency** | **Same order** scenario; vehicle limit enforced in F4 (+ rule 3 test scenario if there is time) | **Last portions** scenario; kitchen capacity enforced in F3 (+ rule 4 test scenario if there is time) | Shared `tests/concurrency/run.py` (output, exit codes) |
 | **Seed** | `seed.sh` orchestration + couriers, offers, deliveries, positions in Mongo | Orders, lines, payments, history, stock | Cities, zones, fees, customers, addresses, restaurants, menu, ratings |
 | **Docs** | README "how to run" section, `redis.md` (all keys), F4 section of `concurrency.md`, Redis runbook | Owner of `postgres.md` and `concurrency.md`, PostgreSQL runbook | `architecture.md`, `mongodb.md`, query 1 `EXPLAIN`, MongoDB runbook |
 
@@ -42,6 +42,7 @@ A has the infrastructure and the hardest part (the race for the "Accept" button,
 ## Phase 0 — Decide together (before writing code)
 
 - [ ] Create the GitHub repo, add the 3 members, give the trainer read access.
+- [ ] **First commit: `.gitignore` with `.env`** (A, step I-0). Nobody runs `git add .` before this is on `main`.
 - [ ] Turn off squash merging.
 - [ ] Fill in the "Who does what" table.
 - [ ] Draw the **ER diagram** (Mermaid) with every table, main columns and FKs.
@@ -55,17 +56,19 @@ A has the infrastructure and the hardest part (the race for the "Accept" button,
 
 Details in `SRamoras-infra-couriers-and-offers.md`.
 
-- [ ] `compose.yml`, `Dockerfile`, `pyproject.toml`, `.env.example`, `.gitignore`.
+- [ ] `.gitignore` first (step I-0), then `compose.yml`, `Dockerfile`, `pyproject.toml`, `.env.example`.
 - [ ] `scripts/setup.sh` and `scripts/seed.sh`.
 - [ ] Connections in `app/db/`, `app/config.py`, `app/main.py`.
 - [ ] Alembic setup + grants migration.
 - [ ] `mongodb/setup.py` base, `redis/rebuild.py` and `redis/verify.py` skeletons, `tests/concurrency/` folder.
-- [ ] `.devcontainer/` (optional dev environment) working with `compose.yml`.
+- [ ] `.devcontainer/devcontainer.json` + `.devcontainer/compose.devcontainer.yml` created (contents in step I-8) and working with `compose.yml`. Optional, but the rest of the group uses it.
 - [ ] **Test:** in a clean clone, `cp .env.example .env && docker compose up -d && ./scripts/setup.sh` runs without errors.
 
 While A does this, B and C can work on the ER diagram, their models and their Lua/pipeline drafts.
 
 ## Phase 2 — PostgreSQL schema (everyone their own tables)
+
+The README asks for **at least 10 tables in third normal form**; this plan has about 18. Any denormalisation (the address and price snapshots) is deliberate and written in `docs/postgres.md`.
 
 Alembic migrations form a chain, so we make them **in this order**. Always `git pull` before creating a new revision; if two heads appear, fix it with `alembic merge`.
 
@@ -89,22 +92,25 @@ All three can start at the same time. Some flows depend on others (noted in brac
 - [ ] F3: restaurant accepts → `GEOSEARCH` 3 km → filter online and with room → up to 5 offers (PG + Redis `EX 45`). *(depends on F2)*
 - [ ] F3: reject, reoffer.
 - [ ] F4: courier accepts → exactly one wins, the others become `withdrawn`, invalid offers → 409.
+- [ ] F4: **vehicle limit** (bicycle 1, scooter 2, car 3) re-checked with `FOR UPDATE` on the courier → 409 when full. Mandatory.
+- [ ] F4: courier declines an offer (`.../reject` → `rejected`).
 - [ ] F4 naive mode.
-- [ ] *(extension)* Vehicle limit with `FOR UPDATE` on the courier.
+- [ ] *(extension)* Rule 3 test scenario in `run.py` (scooter with 1 delivery accepts 2 offers at once).
 
 **B — Orders and stock**
 - [ ] F2: place order with every rule (open, hours, zone, minimum, available, stock, simulated payment, address and price snapshot, history).
 - [ ] F2 naive mode (`?mode=naive`).
 - [ ] Stock in Redis updated after the commit.
-- [ ] F5: preparing, ready, cancel (gives stock back, refund, reason, history).
+- [ ] F5: preparing, ready, cancel by customer, restaurant **and back office** (gives stock back, refund, reason, history).
 - [ ] F5: picked_up, delivered (updates `deliveries` and the ranking). *(depends on F4)*
 - [ ] Invalid transitions → 409, with one shared transition function A also uses.
-- [ ] *(extension)* Kitchen capacity on F3 accept, with `FOR UPDATE` on the restaurant (agree with A where it goes).
+- [ ] **Kitchen capacity** on F3 accept, with `FOR UPDATE` on the restaurant → 409 when full. Mandatory; B writes the check, A calls it in F3.
+- [ ] *(extension)* Rule 4 test scenario in `run.py`.
 
 **C — Catalogue, tracking, reports**
 - [ ] F1: restaurants open now that deliver to the address, with fee and average rating.
 - [ ] F1: a restaurant's menu with the options of each item.
-- [ ] F6: tracking from Redis (`fd:order:{id}:track` + courier position); only goes to PG when the key is missing. *(depends on F2–F5 writing to Redis)*
+- [ ] F6: tracking from Redis (`fd:order:{id}:track` + courier position); the customer check uses the `customer_id` stored in the hash; only goes to PG when the key is missing. *(depends on F2–F5 writing to Redis)*
 - [ ] Ranking of the 20 restaurants with most deliveries in the last hour, per city.
 - [ ] F8: reports endpoint that runs the pipelines. *(depends on the export)*
 
@@ -142,14 +148,15 @@ Order in `seed.sh`: **C's PG seed → B's PG seed (orders) → A's PG seed (cour
 
 ## Phase 7 — Documentation
 
-- [ ] `README.md`: what it is, how to run from a clean clone, concurrency test, stack and why, ER diagram, endpoints / OpenAPI link, how the actor is identified, authors table, links to `docs/`.
+- [ ] `README.md`: what it is, how to run from a clean clone (including "stop the module environment first": same ports), concurrency test, stack and why, ER diagram, endpoints / OpenAPI link, how the actor is identified, authors table, links to `docs/`, **list of extensions done**.
 - [ ] `docs/postgres.md`: tables, constraints, indexes, both lists from the brief, denormalisations, **3 `EXPLAIN` without and with the index**, indexed and non-indexed FKs, roles.
 - [ ] `docs/mongodb.md`: each collection (why Mongo, truth or derived, example, validator, embed or reference), where the options live and why, the export, pipelines with output.
 - [ ] `docs/redis.md`: each key pattern (structure, example, TTL, commands, class), **cache evidence** (`MONITOR` + PG log), rebuild/verify, persistence.
 - [ ] `docs/architecture.md`: source-of-truth table, data flow between engines (sequence diagrams), second-write failures, state that changes with time, security.
 - [ ] `docs/concurrency.md`: isolation, locks, why the naive version breaks, 12 outputs.
-- [ ] `docs/runbook.md`: per engine — backup, backup and restore commands, verification, justified RTO/RPO, what is lost.
-- [ ] `docs/ai-usage.md`: one entry per relevant use + the final declaration with the 3 names.
+- [ ] `docs/runbook.md`: per engine (A: Redis, B: PostgreSQL, C: MongoDB), the 5 points: what is backed up, how often, tool and where; exact backup and restore commands in order; how to verify the restore; justified RTO and RPO; what is lost for good.
+- [ ] `docs/ai-usage.md`: **each of the three** adds their own entries (Who, Tool, For what, Outcome, Verification, Mistakes caught) + the final declaration with the 3 names.
+- [ ] Every extension done is documented in the README and in the relevant `docs/` file.
 
 ## Phase 8 — Prepare session 19
 
