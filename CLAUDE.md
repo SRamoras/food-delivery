@@ -28,7 +28,7 @@ The technical focus is **concurrency**. These rules must hold under simultaneous
 | **B** (RodrigoDias123) | Orders and daily stock (F2, all of F5, scenario "last portions") |
 | **C** (jcleberfernandes) | Catalogue, tracking and reports (F1, F6, F8, report export, all report pipelines but one, shared concurrency script) |
 
-Details in `PLAN.md` and each person's file: `SRamoras-*.md`, `RodrigoDias123-*.md`, `jcleberfernandes-*.md`. Do not write code in another person's slice unless that person asked for it.
+Details in `planning/PLAN.md` and each person's file: `planning/SRamoras-*.md`, `planning/RodrigoDias123-*.md`, `planning/jcleberfernandes-*.md`. Do not write code in another person's slice unless that person asked for it.
 
 ---
 
@@ -75,7 +75,7 @@ pyproject.toml / uv.lock
 .gitignore                    .env, .venv/, __pycache__/, *.pyc, .pytest_cache/, .ruff_cache/, .DS_Store
 README.md
 CLAUDE.md
-PLAN.md, <github-user>-*.md   internal group planning (not graded docs)
+planning/                     internal group planning (not graded docs): PLAN.md + one file per member
 
 app/
   main.py                     FastAPI app, routers, exception handlers
