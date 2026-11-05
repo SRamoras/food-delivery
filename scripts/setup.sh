@@ -84,11 +84,7 @@ echo "==> postgres: alembic upgrade head (fd_owner)"
 uv run alembic -c postgres/alembic.ini upgrade head
 
 # --- 3. MongoDB, as root ---------------------------------------------------------
-if [[ -f mongodb/setup.py ]]; then
-  echo "==> mongo: users, collections, validators, indexes (root)"
-  uv run python mongodb/setup.py
-else
-  echo "==> mongo: skipped (mongodb/setup.py not created yet)"
-fi
+echo "==> mongo: users, collections, validators, indexes (root)"
+uv run python mongodb/setup.py
 
 echo "==> setup done"
