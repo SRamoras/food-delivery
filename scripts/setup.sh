@@ -80,12 +80,8 @@ SQL
 
 # --- 2. PostgreSQL, as fd_owner: migrations ----------------------------------------
 # Alembic's env.py connects with MIGRATION_DATABASE_URL (fd_owner).
-if [[ -f postgres/alembic.ini ]]; then
-  echo "==> postgres: alembic upgrade head (fd_owner)"
-  uv run alembic -c postgres/alembic.ini upgrade head
-else
-  echo "==> postgres: skipped migrations (postgres/alembic.ini not created yet)"
-fi
+echo "==> postgres: alembic upgrade head (fd_owner)"
+uv run alembic -c postgres/alembic.ini upgrade head
 
 # --- 3. MongoDB, as root ---------------------------------------------------------
 if [[ -f mongodb/setup.py ]]; then
