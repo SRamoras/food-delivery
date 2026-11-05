@@ -29,3 +29,8 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "app"
 module-root = ""
+
+# The repo has a top-level redis/ folder (scripts), so ruff would treat `import redis`
+# as our own code. It is the redis-py library.
+[tool.ruff.lint.isort]
+known-third-party = ["redis"]
