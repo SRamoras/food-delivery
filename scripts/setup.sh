@@ -64,6 +64,9 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'food_delivery') \gexe
 -- Only our three roles can connect.
 REVOKE ALL ON DATABASE food_delivery FROM PUBLIC;
 GRANT CONNECT ON DATABASE food_delivery TO fd_app, fd_readonly;
+-- By default every role can connect to the built-in databases. Our roles only need
+-- food_delivery (the superuser bypasses this, so maintenance still works).
+REVOKE CONNECT ON DATABASE postgres, template1 FROM PUBLIC;
 
 \connect food_delivery
 -- Extensions need the superuser. btree_gist: lets a GiST index mix `=` on plain
