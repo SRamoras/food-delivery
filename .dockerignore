@@ -1,0 +1,12 @@
+# keep secrets, local env and caches out of the image
+.env
+.git/
+.venv/
+.devcontainer/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+docs/
+planning/
