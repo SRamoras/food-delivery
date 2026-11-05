@@ -9,14 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # --- environment -------------------------------------------------------------
-# Load .env without overriding variables that are already set. The dev container
-# sets the URLs with service names (postgres, mongo) instead of 127.0.0.1; those win.
-if [[ -f .env ]]; then
-  while IFS='=' read -r key value; do
-    [[ -z "$key" || "$key" == \#* ]] && continue
-    [[ -z "${!key+x}" ]] && export "$key=$value"
-  done < .env
-fi
+source scripts/_env.sh
 
 for var in FD_OWNER_PASSWORD FD_APP_PASSWORD FD_READONLY_PASSWORD; do
   [[ -n "${!var:-}" ]] || { echo "error: $var is not set (cp .env.example .env)" >&2; exit 1; }
