@@ -19,3 +19,13 @@ dev = [
     "pytest>=9.2.0",
     "ruff>=0.17.3",
 ]
+
+# Install the project itself into the venv (editable), so scripts in any folder
+# (redis/, mongodb/, postgres/seed/, tests/) can `import app` without sys.path hacks.
+[build-system]
+requires = ["uv_build>=0.11.16,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "app"
+module-root = ""
