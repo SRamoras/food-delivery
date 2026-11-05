@@ -1,7 +1,9 @@
 # CLAUDE.md — Project B: Food delivery
 
 Context for AI assistants working in this repository. Read this before writing code, schema or docs.
-The full rules are in `README.md` (course rules) and `b-food-delivery.md` (business brief). If this file disagrees with them, they win; point out the conflict instead of guessing.
+The full rules are in `planning/course-rules.md` (the module's group project rules, copied from the module repo) and `planning/b-food-delivery.md` (the business brief). If this file disagrees with them, they win; point out the conflict instead of guessing.
+
+Two different READMEs: "the course rules" means `planning/course-rules.md`. `README.md` in the repo root is **this project's** README (what it does, how to run it, ER diagram, endpoints, authors table), which the course rules ask us to write.
 
 ## What this project is
 
@@ -75,7 +77,8 @@ pyproject.toml / uv.lock
 .gitignore                    .env, .venv/, __pycache__/, *.pyc, .pytest_cache/, .ruff_cache/, .DS_Store
 README.md
 CLAUDE.md
-planning/                     internal group planning (not graded docs): PLAN.md + one file per member
+planning/                     internal group planning (not graded docs): PLAN.md, one file per member,
+                              course-rules.md and b-food-delivery.md (copies of the trainer's files)
 
 app/
   main.py                     FastAPI app, routers, exception handlers
@@ -251,6 +254,15 @@ Service in `compose.yml`:
 - Type hints everywhere. Routers are thin: parse input, call a service, map the result. Business rules live in `app/services/`.
 - Code, comments, `README.md` and everything in `docs/` are in **English**.
 
+### Docstrings and comments
+- Every module starts with a **one-line docstring** saying what the file is for (as in `app/config.py` and `app/db/*.py`).
+- **Services and other non-trivial functions** get a short docstring: what it does, which business rule it enforces and, for concurrent flows, which lock or conditional update protects it.
+- **Router functions** get a one-line docstring: FastAPI shows it as the endpoint description in `/docs`, which is how every endpoint gets documented.
+- **Comments explain why, not what:** the reason for a lock, a TTL, a pool size, a constraint, an `ON DELETE`. Never `# increment i`.
+- **No docstrings on trivial code:** Pydantic schemas whose fields speak for themselves, one-line helpers, routers that only call a service (beyond the one line above).
+- Keep them short (1–3 lines). Use the Google style (`Args:` / `Returns:` / `Raises:`) only when the arguments really need explaining.
+- Docstrings and comments must stay true: when the code changes, update them in the same commit.
+
 ### HTTP status codes
 | Case | Status |
 |---|---|
@@ -260,7 +272,9 @@ Service in `compose.yml`:
 | Invalid input (Pydantic) | 422 |
 | Refused by a business rule (stock, already taken, capacity, invalid transition, closed, below minimum, zone not delivered, payment declined) | **409** with `{"detail": "<reason>"}` |
 
-A request must never return 5xx because of a business rule. In real mode, a 5xx fails the concurrency test. Catch `IntegrityError` from constraints that back a rule and map it to 409.
+A request must never return 5xx because of a business rule. In real mode, a 5xx fails the concurrency test.
+
+`IntegrityError`: in **real mode**, catch it explicitly in the service, only where a constraint backs a rule (for example the `UNIQUE (order_id)` on `deliveries`), and raise `Conflict` (409). There is **no global `IntegrityError` handler**: in naive mode the violation must surface as a 5xx so the concurrency test shows the race, and an unexpected violation (a bug, such as a missing `NOT NULL` value) must stay visible as a 500 instead of looking like a normal 409.
 
 ### SQLAlchemy
 - SQLAlchemy 2.0 style: `Mapped[...]`, `mapped_column`, `select()`, `session.execute(...)`. No legacy `session.query`.
@@ -274,7 +288,7 @@ A request must never return 5xx because of a business rule. In real mode, a 5xx 
 - Autogenerate is allowed for tables, but **always review and edit** the result. Everything the ORM does not express goes in `op.execute(...)` in the migration: multi-column `CHECK`, `EXCLUDE`, partial unique indexes, triggers, `REVOKE`, `GRANT`, `ALTER DEFAULT PRIVILEGES`.
 - Every migration has a working `downgrade()`.
 - Never `Base.metadata.create_all()`.
-- Extensions (`btree_gist`, `pg_trgm`) and roles are created in `scripts/setup.sh` by the superuser, not in migrations.
+- Extensions and roles are created in `scripts/setup.sh` by the superuser, not in migrations. We need `btree_gist` (for the `EXCLUDE` on opening hours). `pg_trgm` only if we add a text-search feature; do not create extensions we do not use.
 - Migrations form one chain: always `git pull` before creating a revision; if two heads appear, fix with `alembic merge`.
 
 ### MongoDB
@@ -416,4 +430,4 @@ Report pipelines to implement (at least 3 of the brief's 6): **1** delivery time
 
 ## Deadline
 
-Delivery = highest SemVer tag (e.g. `v1.0.0`) pushed **before session 19 starts**. Go through the delivery checklist at the end of `README.md` first.
+Delivery = highest SemVer tag (e.g. `v1.0.0`) pushed **before session 19 starts**. Go through the delivery checklist at the end of `planning/course-rules.md` first.

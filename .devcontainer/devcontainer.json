@@ -1,0 +1,36 @@
+{
+  "name": "Food delivery",
+  // the project's compose.yml + the extra "workspace" service below
+  "dockerComposeFile": ["../compose.yml", "compose.devcontainer.yml"],
+  "service": "workspace",
+  // databases + workspace; not "api" (run uvicorn in the workspace) and not "dbgate" (profile tools)
+  "runServices": ["postgres", "mongo", "redis", "workspace"],
+  "shutdownAction": "stopCompose",
+  "workspaceFolder": "/workspaces/food-delivery",
+  // Docker CLI inside, talking to the host's Docker: setup.sh uses "docker compose exec"
+  "features": { "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {} },
+  "containerEnv": {
+    // the uv cache and the venv are on different filesystems: copy instead of hardlink
+    "UV_LINK_MODE": "copy",
+    // keep the container's (Linux) venv out of the repo folder, which is shared with
+    // the host: otherwise uv sync here would replace the host's .venv and vice versa
+    "UV_PROJECT_ENVIRONMENT": "/home/vscode/.venv"
+  },
+  // same uv minor as uv_build in pyproject.toml
+  "postCreateCommand": "pip install --user 'uv>=0.11.16,<0.12' && uv sync",
+  "forwardPorts": [8000, 3000],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "ms-azuretools.vscode-docker",
+        "mongodb.mongodb-vscode",
+        "anthropic.claude-code"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/home/vscode/.venv/bin/python"
+      }
+    }
+  }
+}

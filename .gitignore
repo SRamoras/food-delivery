@@ -1,0 +1,14 @@
+# secrets
+.env
+
+# python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# tools
+.pytest_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store

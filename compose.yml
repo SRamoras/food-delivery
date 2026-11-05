@@ -1,0 +1,119 @@
+name: food-delivery
+
+# Every password comes from .env through ${...}; nothing secret is written here.
+# Ports are published on 127.0.0.1 only, so the databases are not reachable from the network.
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    # Statement logging is off by default; PG_LOG_STATEMENT=all shows which reads hit PG (cache evidence).
+    command: ["postgres", "-c", "log_statement=${PG_LOG_STATEMENT:-none}"]
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mongo:
+    image: mongo:8.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      # ping needs no authentication
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4
+    # --appendonly yes + everysec: at most ~1 s of writes lost on a crash (documented in docs/redis.md).
+    # noeviction: when memory is full, writes fail instead of Redis silently dropping keys
+    # such as pending offers or stock copies.
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+    environment:
+      # redis-cli reads the password from here, so it is not passed with -a on the command line
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    # Only what the API needs, with service names instead of 127.0.0.1.
+    # The superuser, owner and Mongo root passwords never reach this container (least privilege).
+    environment:
+      DATABASE_URL: postgresql+psycopg://fd_app:${FD_APP_PASSWORD:?set FD_APP_PASSWORD in .env}@postgres:5432/food_delivery
+      MONGO_URL: mongodb://fd_app:${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD in .env}@mongo:27017/food_delivery?authSource=food_delivery
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0
+      ENABLE_NAIVE_MODE: ${ENABLE_NAIVE_MODE:-false}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Development only: started with `docker compose --profile tools up -d dbgate`.
+  dbgate:
+    image: dbgate/dbgate
+    profiles: ["tools"]
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on: [postgres, mongo, redis]
+    environment:
+      CONNECTIONS: pg,mongo,redis
+
+      LABEL_pg: PostgreSQL (read-only)
+      SERVER_pg: postgres
+      PORT_pg: 5432
+      USER_pg: fd_readonly
+      PASSWORD_pg: ${FD_READONLY_PASSWORD:?set FD_READONLY_PASSWORD in .env}
+      DATABASE_pg: food_delivery
+      ENGINE_pg: postgres@dbgate-plugin-postgres
+
+      LABEL_mongo: MongoDB
+      URL_mongo: mongodb://fd_app:${MONGO_APP_PASSWORD:?set MONGO_APP_PASSWORD in .env}@mongo:27017/food_delivery?authSource=food_delivery
+      ENGINE_mongo: mongo@dbgate-plugin-mongo
+
+      LABEL_redis: Redis
+      SERVER_redis: redis
+      PORT_redis: 6379
+      PASSWORD_redis: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      ENGINE_redis: redis@dbgate-plugin-redis
+
+volumes:
+  pg_data:
+  mongo_data:
+  redis_data:
