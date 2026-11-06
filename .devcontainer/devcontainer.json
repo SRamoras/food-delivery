@@ -1,11 +1,10 @@
 {
   "name": "Food delivery",
-  // the project's compose.yml + the extra "workspace" service below
-  "dockerComposeFile": ["../compose.yml", "compose.devcontainer.yml"],
-  "service": "workspace",
-  // databases + workspace; not "api" (run uvicorn in the workspace) and not "dbgate" (profile tools)
-  "runServices": ["postgres", "mongo", "redis", "workspace"],
-  "shutdownAction": "stopCompose",
+  // just the dev environment; the databases are the ones from compose.yml, started on the host
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
+  // host network: 127.0.0.1:5432/27017/6379 are the ports compose.yml publishes on the host,
+  // so the .env URLs work unchanged inside the container
+  "runArgs": ["--network=host"],
   "workspaceFolder": "/workspaces/food-delivery",
   // Docker CLI inside, talking to the host's Docker: setup.sh uses "docker compose exec"
   "features": { "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {} },
@@ -18,7 +17,6 @@
   },
   // same uv minor as uv_build in pyproject.toml
   "postCreateCommand": "pip install --user 'uv>=0.11.16,<0.12' && uv sync",
-  "forwardPorts": [8000, 3000],
   "customizations": {
     "vscode": {
       "extensions": [
