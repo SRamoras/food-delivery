@@ -1,13 +1,16 @@
 {
   "name": "Food delivery",
   // just the dev environment; the databases are the ones from compose.yml, started on the host
-  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
+  // trixie, not bookworm: the bookworm image's Yarn apt repo has no valid GPG key, which
+  // makes apt-get update fail when the docker-outside-of-docker feature is installed
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-trixie",
   // host network: 127.0.0.1:5432/27017/6379 are the ports compose.yml publishes on the host,
   // so the .env URLs work unchanged inside the container
   "runArgs": ["--network=host"],
   "workspaceFolder": "/workspaces/food-delivery",
   // Docker CLI inside, talking to the host's Docker: setup.sh uses "docker compose exec"
-  "features": { "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {} },
+  // moby: false because the feature has no Moby packages for trixie; uses Docker's own CLI packages
+  "features": { "ghcr.io/devcontainers/features/docker-outside-of-docker:1": { "moby": false } },
   "containerEnv": {
     // the uv cache and the venv are on different filesystems: copy instead of hardlink
     "UV_LINK_MODE": "copy",
