@@ -70,7 +70,7 @@ The top-level folders are required by the course. Do not move them.
 
 ```
 compose.yml                   postgres, mongo, redis, api (+ dbgate in profile tools); top-level name: food-delivery
-.devcontainer/                optional dev environment (VS Code / Codespaces): devcontainer.json + compose.devcontainer.yml
+.devcontainer/                optional dev environment (VS Code / Codespaces): devcontainer.json + compose.devcontainer.yml + Dockerfile
 Dockerfile                    api image, built with uv
 pyproject.toml / uv.lock
 .env.example                  placeholders only
