@@ -1,36 +1,40 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/docker-in-docker
 {
-  "name": "Food delivery",
-  // the project's compose.yml + the extra "workspace" service below
-  "dockerComposeFile": ["../compose.yml", "compose.devcontainer.yml"],
-  "service": "workspace",
-  // databases + workspace; not "api" (run uvicorn in the workspace) and not "dbgate" (profile tools)
-  "runServices": ["postgres", "mongo", "redis", "workspace"],
-  "shutdownAction": "stopCompose",
-  "workspaceFolder": "/workspaces/food-delivery",
-  // Docker CLI inside, talking to the host's Docker: setup.sh uses "docker compose exec"
-  "features": { "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {} },
-  "containerEnv": {
-    // the uv cache and the venv are on different filesystems: copy instead of hardlink
-    "UV_LINK_MODE": "copy",
-    // keep the container's (Linux) venv out of the repo folder, which is shared with
-    // the host: otherwise uv sync here would replace the host's .venv and vice versa
-    "UV_PROJECT_ENVIRONMENT": "/home/vscode/.venv"
-  },
-  // same uv minor as uv_build in pyproject.toml
-  "postCreateCommand": "pip install --user 'uv>=0.11.16,<0.12' && uv sync",
-  "forwardPorts": [8000, 3000],
-  "customizations": {
-    "vscode": {
-      "extensions": [
-        "ms-python.python",
-        "charliermarsh.ruff",
-        "ms-azuretools.vscode-docker",
-        "mongodb.mongodb-vscode",
-        "anthropic.claude-code"
-      ],
-      "settings": {
-        "python.defaultInterpreterPath": "/home/vscode/.venv/bin/python"
-      }
-    }
-  }
+	"name": "Docker in Docker",
+	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
+	"image": "mcr.microsoft.com/devcontainers/base:bookworm",
+
+	"features": {
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {
+			"version": "latest",
+			"moby": "true"
+		},
+		"ghcr.io/devcontainers/features/python:1": { "version": "3.12" },
+		"ghcr.io/devcontainer-community/devcontainer-features/astral.sh-uv:1": {}
+	},
+
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+
+	// Use 'postCreateCommand' to run commands after the container is created.
+	// "postCreateCommand": "docker --version",
+
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python",
+				"charliermarsh.ruff",
+				"ms-azuretools.vscode-docker",
+				"mongodb.mongodb-vscode",
+				"anthropic.claude-code"
+			]
+		}
+	}
+
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "root"
 }
+
+
+
