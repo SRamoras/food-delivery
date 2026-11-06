@@ -5,7 +5,8 @@
 # override a variable that is already set).
 services:
   workspace:
-    image: mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
+    build:
+      context: .devcontainer
     command: sleep infinity
     volumes:
       - .:/workspaces/food-delivery:cached
