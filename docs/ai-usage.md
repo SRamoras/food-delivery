@@ -35,3 +35,12 @@
 - **Outcome:** kept. The code was typed by hand from the AI's draft. Two of RodrigoDias123's decisions were applied: `cancelled_by` is stored in `orders` as well as in the history, and cancel reasons are a fixed list with a `CHECK`. Column sizes and id types are provisional until the catalogue tables exist.
 - **Verification:** `ruff check` and `ruff format --check` passed. The models were imported and their SQL was generated with the missing tables simulated in memory, to check the columns, `CHECK` constraints, foreign keys and indexes. This does not yet prove that PostgreSQL enforces them; that is tested with the migration.
 - **Mistakes caught:** none in the draft. `ruff format --check` found a missing blank line after the code was typed, and it was fixed before the commit.
+
+## Payment model
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code
+- **For what:** drafting the `Payment` model and explaining its `CHECK` constraints and partial unique indexes; `app/models/payments.py`
+- **Outcome:** kept. The code was typed by hand from the AI's draft. Refunds are new rows, and a refund by card or MB WAY needs its own reference because `provider_ref` is unique; the refund itself is written in a later step.
+- **Verification:** `ruff check` and `ruff format --check` passed. The model was imported and its SQL was generated with `orders` simulated in memory, to check the columns, `CHECK` constraints, foreign key and indexes. This does not yet prove that PostgreSQL enforces them; that is tested with the migration.
+- **Mistakes caught:** none.
