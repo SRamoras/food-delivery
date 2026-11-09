@@ -53,3 +53,21 @@
 - **Outcome:** kept, but provisional. Id types and `delivery_*` column sizes must be checked against the catalogue tables, and the migration cannot reach `dev` before those tables exist. The project guide suggested a `GRANT` in `downgrade()`; it was left out because dropping the table already removes its grants.
 - **Verification:** applied with `alembic upgrade head` against temporary catalogue tables, which were removed afterwards. Valid rows were accepted as `fd_app`. PostgreSQL refused rows that broke the `CHECK` constraints, the unique indexes and the `RESTRICT` foreign keys. On a real `fd_app` connection, `UPDATE`, `DELETE` and `TRUNCATE` on the history gave `permission denied`. An Alembic comparison found no differences between the models and the database, although it does not compare `CHECK` constraints, and `downgrade` worked. To be repeated with the real tables.
 - **Mistakes caught:** none.
+
+## Order status machine
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code
+- **For what:** writing and explaining the shared status machine used by F2, F3 and F5 (allowed transitions, who may make each one, `SELECT ... FOR UPDATE` on the order, history row in the same transaction); `app/services/order_status.py`, `tests/test_order_status.py`
+- **Outcome:** kept. The AI wrote the files from the project guide. RodrigoDias123 asked for comments explaining each function, and they were added. A reject may give a reason but does not need one; SRamoras has to be told, because F3 reject uses this function.
+- **Verification:** `ruff check` and `ruff format --check` passed. 8 `pytest` cases without a database: 4 allowed and 4 refused transitions (backwards, too late to cancel, final status, wrong actor). The row lock is not tested yet; that needs two real requests at the same time (steps 6 and 8).
+- **Mistakes caught:** the AI first wrote a longer test file without asking, and proposed a commit message different from the guide's. Both were changed back to the guide's version. `ruff check` found unsorted imports in the AI's test file, and they were fixed before the commit.
+
+## Place-order schemas and option pricing
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code
+- **For what:** writing and explaining the Pydantic request and response models for orders, and the unit price of a line from the `menu_items.options` jsonb (item price plus extras, with a snapshot of the chosen options); `app/schemas/orders.py`, `app/services/pricing.py`, `tests/test_pricing.py`
+- **Outcome:** kept, with two decisions by RodrigoDias123. An option group without `max` allows one choice, so groups that allow more (such as removals) need an explicit `max` in jcleberfernandes's catalogue data. The cancel reason is a `Literal` with the 6 fixed reasons, not free text.
+- **Verification:** `ruff check` and `ruff format --check` passed. 8 `pytest` cases without a database: the price with extras is exact (12.60, no float error) and so is the snapshot; an unknown group or choice, a chosen allergen, two choices in a group without `max` and a missing required group give 409; the reason list matches `CANCEL_REASONS`; a reason outside the list fails validation (422).
+- **Mistakes caught:** the guide's draft had the cancel reason as free text. Because of the `CHECK` on `orders.cancel_reason`, a reason outside the list would pass Pydantic and then fail in PostgreSQL as a 500, which `CLAUDE.md` does not allow. The AI pointed this out before writing the code, and the `Literal` that the guide offers for a fixed list was used instead.
