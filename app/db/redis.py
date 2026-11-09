@@ -30,3 +30,4 @@ def load_script(name: str) -> Script:
 
 # Scripts are registered here as they are written.
 courier_position = load_script("courier_position")
+fill_tracking = load_script("fill_tracking")
