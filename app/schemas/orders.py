@@ -19,11 +19,15 @@ CancelReason = Literal[
 
 
 class ChosenOption(BaseModel):
+    """One choice the customer made for an item, checked against the menu by pricing."""
+
     type: str  # option group, e.g. "size"
     name: str  # choice inside the group, e.g. "large"
 
 
 class OrderLineIn(BaseModel):
+    """One line of a new order: which item, how many, and the chosen options."""
+
     item_id: int
     # le=50: a typo like 500 portions is refused before it touches the stock.
     quantity: int = Field(ge=1, le=50)
@@ -31,6 +35,8 @@ class OrderLineIn(BaseModel):
 
 
 class PlaceOrderIn(BaseModel):
+    """Body of POST /customers/{customer_id}/orders (F2). Bad input → 422."""
+
     # A saved address id, so the service can check it belongs to this customer.
     address_id: int
     lines: list[OrderLineIn] = Field(min_length=1)
@@ -40,6 +46,8 @@ class PlaceOrderIn(BaseModel):
 
 
 class OrderOut(BaseModel):
+    """The order as the API returns it, with the money totals."""
+
     id: int
     status: str
     restaurant_id: int
@@ -50,9 +58,13 @@ class OrderOut(BaseModel):
 
 
 class CancelIn(BaseModel):
+    """Body of the cancel endpoints (F5): one of the fixed reasons."""
+
     reason: CancelReason
 
 
 class StatusOut(BaseModel):
+    """Answer of a status change (F5): the order and its new status."""
+
     id: int
     status: str

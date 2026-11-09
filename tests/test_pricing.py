@@ -24,10 +24,12 @@ OPTIONS = [
 
 
 def opt(type_: str, name: str) -> ChosenOption:
+    """Shorthand for one chosen option."""
     return ChosenOption(type=type_, name=name)
 
 
 def test_price_adds_extras_without_float_errors() -> None:
+    """9.50 + 2.10 + 1.00 is exactly 12.60, and the snapshot keeps each extra paid."""
     unit, snapshot = price_line(
         Decimal("9.50"), OPTIONS, [opt("size", "large"), opt("extras", "cheese")]
     )
@@ -49,14 +51,17 @@ def test_price_adds_extras_without_float_errors() -> None:
     ],
 )
 def test_invalid_choices_are_refused(chosen: list[ChosenOption]) -> None:
+    """Choices the menu does not allow are a business rule refusal (409), not a 422."""
     with pytest.raises(Conflict):
         price_line(Decimal("9.50"), OPTIONS, chosen)
 
 
 def test_cancel_reasons_match_the_model_and_the_check() -> None:
+    """The schema's Literal and CANCEL_REASONS (used by the CHECK) never drift apart."""
     assert set(get_args(CancelReason)) == set(CANCEL_REASONS)
 
 
 def test_cancel_reason_outside_the_list_is_a_422() -> None:
+    """A free-text reason fails validation at the door instead of the CHECK (500)."""
     with pytest.raises(ValidationError):
         CancelIn(reason="took too long")

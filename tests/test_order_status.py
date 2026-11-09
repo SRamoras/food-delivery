@@ -16,6 +16,7 @@ from app.services.order_status import check_transition
     ],
 )
 def test_allowed(old: str | None, new: str, actor: str) -> None:
+    """A valid move by the right actor passes without raising."""
     check_transition(old, new, actor)
 
 
@@ -29,5 +30,6 @@ def test_allowed(old: str | None, new: str, actor: str) -> None:
     ],
 )
 def test_refused(old: str | None, new: str, actor: str) -> None:
+    """Backwards, too late, from a final status or by the wrong actor → Conflict (409)."""
     with pytest.raises(Conflict):
         check_transition(old, new, actor)
