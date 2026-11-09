@@ -62,3 +62,57 @@
 - **Outcome:** kept. The `EXCLUDE` on opening hours was added by hand to the generated migration. `ON DELETE` choices and the `down_revision` change are to be confirmed by the group.
 - **Verification:** ran upgrade and downgrade; psql tests refused a second default address, an 8-digit NIF and overlapping hours, and accepted adjacent periods and a full day; `setup.sh` from an empty database applied all 5 migrations in order; `alembic check` reported no differences; ruff passed.
 - **Mistakes caught:** the first run from an empty database failed with two Alembic heads, fixed by the `down_revision` change. `alembic check` then reported the order tables as removed because `orders` and `payments` were not imported in `app/models/__init__.py`; the import was added.
+
+## Order status machine
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code
+- **For what:** writing and explaining the shared status machine used by F2, F3 and F5 (allowed transitions, who may make each one, `SELECT ... FOR UPDATE` on the order, history row in the same transaction); `app/services/order_status.py`, `tests/test_order_status.py`
+- **Outcome:** kept. The AI wrote the files from the project guide. RodrigoDias123 asked for comments explaining each function, and they were added. A reject may give a reason but does not need one; SRamoras has to be told, because F3 reject uses this function.
+- **Verification:** `ruff check` and `ruff format --check` passed. 8 `pytest` cases without a database: 4 allowed and 4 refused transitions (backwards, too late to cancel, final status, wrong actor). The row lock is not tested yet; that needs two real requests at the same time (steps 6 and 8).
+- **Mistakes caught:** the AI first wrote a longer test file without asking, and proposed a commit message different from the guide's. Both were changed back to the guide's version. `ruff check` found unsorted imports in the AI's test file, and they were fixed before the commit.
+
+## Place-order schemas and option pricing
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code
+- **For what:** writing and explaining the Pydantic request and response models for orders, and the unit price of a line from the `menu_items.options` jsonb (item price plus extras, with a snapshot of the chosen options); `app/schemas/orders.py`, `app/services/pricing.py`, `tests/test_pricing.py`
+- **Outcome:** kept, with two decisions by RodrigoDias123. An option group without `max` allows one choice, so groups that allow more (such as removals) need an explicit `max` in jcleberfernandes's catalogue data. The cancel reason is a `Literal` with the 6 fixed reasons, not free text.
+- **Verification:** `ruff check` and `ruff format --check` passed. 8 `pytest` cases without a database: the price with extras is exact (12.60, no float error) and so is the snapshot; an unknown group or choice, a chosen allergen, two choices in a group without `max` and a missing required group give 409; the reason list matches `CANCEL_REASONS`; a reason outside the list fails validation (422).
+- **Mistakes caught:** the guide's draft had the cancel reason as free text. Because of the `CHECK` on `orders.cancel_reason`, a reason outside the list would pass Pydantic and then fail in PostgreSQL as a 500, which `CLAUDE.md` does not allow. The AI pointed this out before writing the code, and the `Literal` that the guide offers for a fixed list was used instead.
+
+## Daily stock decrement
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code
+- **For what:** writing and explaining the lazy creation of today's stock row (`INSERT ... ON CONFLICT DO NOTHING` from `menu_items.daily_stock`) and the conditional decrement that enforces rule 2 (`UPDATE ... WHERE remaining >= :qty RETURNING remaining`, 0 rows → 409); `app/services/stock.py`
+- **Outcome:** kept. The AI wrote the file from the project guide. RodrigoDias123 chose plain SQL in `text()` over the ORM, so the rule 2 statement reads the same in the code, in `CLAUDE.md` and in `docs/concurrency.md`; every value is a bound parameter. The column name `menu_items.daily_stock` was checked in jcleberfernandes's model. Locking items in ascending `item_id` order (to avoid deadlocks) is left to the caller, `place_order`.
+- **Verification:** `ruff check` and `ruff format --check` passed. A scratch script outside the repo, connected as `fd_app` to the real schema: the first call created today's row only for the item with a configured stock, and a second call did not reset it. Then 60 threads, each in its own transaction and released together by a barrier, took 1 portion of an item with 30: 30 succeeded, 30 got "sold out", 0 other errors, the stock ended at 0, and each value from 0 to 29 was returned exactly once. The test data was deleted afterwards.
+- **Mistakes caught:** none.
+
+## Place order service (F2)
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code
+- **For what:** writing and explaining `place_order`, the single transaction of F2 (declined payment, address ownership, restaurant open and within its Lisbon hours, delivered zone, available items from one restaurant, option prices and minimum, daily stock in ascending `item_id` order, then the order with its address snapshot, lines, approved payment and first history row); `app/services/orders.py`. Also merging `origin/cleber` into `Rodrigo`, because without jcleberfernandes's models SQLAlchemy could not resolve the foreign keys of `orders` (`NoReferencedTableError` on flush).
+- **Outcome:** kept. The AI wrote the file from the project guide, adapted to jcleberfernandes's real tables. The merge had one conflict, in `docs/ai-usage.md` (both sides added entries); both were kept. Only the stock is protected against concurrency; the other checks are plain reads, which is accepted and will be explained in `docs/concurrency.md`.
+- **Verification:** `ruff check`, `ruff format --check` and `pytest` passed. A scratch script outside the repo ran every case against the real schema as `fd_app`, each in a savepoint, all rolled back at the end: 11 refusals with the right error (declined, another customer's address → 404, restaurant closed, open every weekday except today, zone not delivered, two restaurants, unavailable item, unknown item, below minimum, required option missing, 2 + 2 portions of an item with 3 left), none of them left an order or a stock row; a card order gave subtotal 24.20, fee 2.50, tip 1.00, total 27.70, a `sim_` reference, history `None → placed` by the customer and stock 3 → 1; a cash order had no reference and an item without a limit took no stock.
+- **Mistakes caught:** the guide read `menu_items.restaurant_id`, which does not exist (items belong to a category, so the query joins `menu_categories`), and used `isoweekday()` (Monday = 1) while `opening_periods.weekday` uses 0 = Monday, which would have checked the next day's hours. Both were fixed before writing the code. The test then found that `hours @> :m` failed with `operator does not exist: int4range @> smallint`, because psycopg sends small integers as `smallint`; without `CAST(:m AS integer)` every order would have been a 500.
+
+## Place order endpoint (F2)
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code
+- **For what:** writing and explaining `POST /customers/{customer_id}/orders`, a thin `def` route that opens one transaction, calls `place_order` and returns 201 with `OrderOut`; `app/routers/orders.py`, and two lines in SRamoras's `app/main.py` to include the router where he left the comment for it
+- **Outcome:** kept, with two differences from the project guide, chosen by RodrigoDias123: no `?mode=naive` yet (it arrives with `take_stock_naive` in step 4), and no `side_effects.py` yet (the Redis stock copy is step 5 and the tracking function is jcleberfernandes's; importing functions that do not exist yet would log an error on every order). SRamoras has to be told about the change to `main.py`.
+- **Verification:** `ruff check`, `ruff format --check` and `pytest` passed. The API was run locally with `uvicorn` against test data created as `postgres` and deleted afterwards. 8 `curl` requests: `simulate: declined` → 409 with the row counts of `orders`, `order_lines`, `payments`, `order_status_history` and `daily_stock` the same before and after; a valid card order → 201 (subtotal 19.00, fee 2.50, tip 1.00, total 22.50) with one order, line, `sim_` payment and `None → placed` history row, and stock 5 → 3; another customer's address → 404; below the minimum → 409; 4 portions with 3 left → 409 `sold out`; quantity 0, an unknown payment method and no lines → 422. No 500 in the server log. `/docs` lists the route with its docstring as the description.
+- **Mistakes caught:** none in the code. The first command used to stop the test server matched its own command line and ended the shell before `git status` ran; it was run again.
+
+## Naive stock path for the race demo
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code
+- **For what:** writing and explaining `take_stock_naive` (read with a plain `SELECT`, check in Python, write the absolute value with `SET remaining = :new`, no lock, on purpose), the `naive` switch in `place_order`, and `?mode=real|naive` on the place-order route, which answers 404 when `ENABLE_NAIVE_MODE` is off; `app/services/stock.py`, `app/services/orders.py`, `app/routers/orders.py`. Also one-line docstrings for every class and function in RodrigoDias123's files that had none (`PlacedOrder`, the order schemas, the test functions), at his request; `app/schemas/orders.py`, `tests/test_order_status.py`, `tests/test_pricing.py`.
+- **Outcome:** kept. The naive path writes the absolute value, as the project guide recommends: the result is a silent lost update (more orders than portions, no error), which shows the race better than a `CHECK` failure (500); both are to be explained in `docs/concurrency.md`. No artificial delay (`pg_sleep`) was needed, because the race showed up without it. `CLAUDE.md` asks for no docstrings on trivial Pydantic schemas; they were added anyway because RodrigoDias123 asked, kept to one line each.
+- **Verification:** `ruff check`, `ruff format --check` and `pytest` passed, and a script confirmed that no class or function in these files is left without a docstring. A scratch script outside the repo ran 60 threads, each in its own transaction, against an item with 30 portions, as `fd_app`: naive mode 3 times → 60 sold, 0 sold out, 0 errors, stock ending at 27, 27 and 28; real mode once → 30 sold, 30 sold out, 0 errors, stock 0. Over HTTP with `uvicorn`: switch on, `?mode=naive` and `?mode=real` → 201, `?mode=fast` → 422; switch off, `?mode=naive` → 404 `naive mode is disabled`, no mode → 201. No 500 in the server log, and the test data was deleted afterwards.
+- **Mistakes caught:** none.
