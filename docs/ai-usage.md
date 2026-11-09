@@ -162,3 +162,12 @@
 - **Verification:** `alembic upgrade`, `downgrade -1` and `upgrade` again; `alembic check` reported no differences; as `fd_app`, PostgreSQL refused a bicycle with a plate, a car without one, a repeated plate, email and phone, an unknown vehicle type and status, and changing a car to a bicycle while keeping its plate; two bicycles without a plate were accepted; ruff passed.
 >>>>>>> 6689035 (docs: add ai usage entries for infrastructure and couriers)
 - **Mistakes caught:** none.
+
+## F7: courier online, position and offline
+
+- **Who:** SRamoras
+- **Tool:** Claude Code
+- **For what:** the position Lua script and the F7 endpoints; `redis/scripts/courier_position.lua`, `app/db/redis.py`, `app/services/couriers.py`, `app/schemas/couriers.py`, `app/routers/couriers.py`, `app/main.py`
+- **Outcome:** kept. Two choices beyond the plan: `/position` only works while the online key exists (the check is inside the Lua script, so it is atomic with the write), which means PostgreSQL is read only by `/online` and the blocked check runs there; and `/offline` is idempotent. `order_id` in the trail is left for when `deliveries` exists (C-4).
+- **Verification:** ruff passed; with the API running locally: `/online` → 200 and the courier showed in `GEOSEARCH ... BYRADIUS 3 km` with the online key at `TTL 30`; `/position` → 200 and a second document in `courier_positions`; blocked courier → 409, unknown courier → 404, longitude 200 → 422, `/position` before `/online` or after `/offline` → 409; after 31 s without positions the online key was gone and `/position` gave 409. Test rows, keys and documents were removed.
+- **Mistakes caught:** none.
