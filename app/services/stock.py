@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.config import LISBON
 from app.db.redis import client as redis_client
 from app.errors import Conflict
+from app.models.orders import Order
 
 # A request still in flight at midnight may write yesterday's key; without a margin
 # that key would be born already expired.
@@ -116,3 +117,41 @@ def take_stock_naive(session: Session, item_id: int, qty: int, day: date) -> int
         {"new": new_value, "item": item_id, "day": day},
     )
     return new_value
+
+
+def release_stock(session: Session, order: Order) -> tuple[dict[int, int], date]:
+    """Give back the portions of a cancelled or rejected order. Returns PG's new values.
+
+    Runs in the same transaction as the status change, with the order already locked
+    (lock_order), so the same order can never give its portions back twice. The
+    portions go back to the stock row of the ORDER's Lisbon day, not today's:
+    cancelling at 00:10 an order from 23:50 must not inflate the new day's stock.
+    Items without a configured stock have no row and are left alone.
+    """
+    day = order.created_at.astimezone(LISBON).date()
+    params = {"o": order.id, "day": day}
+    # Lock the stock rows in ascending item_id order, the same order place_order uses,
+    # so a cancel and a new order on the same items wait for each other, never deadlock.
+    session.execute(
+        text("""
+            SELECT 1 FROM daily_stock
+             WHERE stock_date = :day
+               AND item_id IN (SELECT item_id FROM order_lines WHERE order_id = :o)
+             ORDER BY item_id
+               FOR UPDATE
+        """),
+        params,
+    )
+    # One UPDATE for every item; the same item on two lines is added up first.
+    rows = session.execute(
+        text("""
+            UPDATE daily_stock ds SET remaining = ds.remaining + q.qty
+              FROM (SELECT item_id, sum(quantity) AS qty
+                      FROM order_lines WHERE order_id = :o
+                     GROUP BY item_id) q
+             WHERE ds.item_id = q.item_id AND ds.stock_date = :day
+            RETURNING ds.item_id, ds.remaining
+        """),
+        params,
+    ).all()
+    return {item_id: remaining for item_id, remaining in rows}, day
