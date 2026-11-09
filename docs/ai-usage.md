@@ -63,6 +63,7 @@
 - **Verification:** ran upgrade and downgrade; psql tests refused a second default address, an 8-digit NIF and overlapping hours, and accepted adjacent periods and a full day; `setup.sh` from an empty database applied all 5 migrations in order; `alembic check` reported no differences; ruff passed.
 - **Mistakes caught:** the first run from an empty database failed with two Alembic heads, fixed by the `down_revision` change. `alembic check` then reported the order tables as removed because `orders` and `payments` were not imported in `app/models/__init__.py`; the import was added.
 
+<<<<<<< HEAD
 ## Order status machine
 
 - **Who:** RodrigoDias123
@@ -115,4 +116,49 @@
 - **For what:** writing and explaining `take_stock_naive` (read with a plain `SELECT`, check in Python, write the absolute value with `SET remaining = :new`, no lock, on purpose), the `naive` switch in `place_order`, and `?mode=real|naive` on the place-order route, which answers 404 when `ENABLE_NAIVE_MODE` is off; `app/services/stock.py`, `app/services/orders.py`, `app/routers/orders.py`. Also one-line docstrings for every class and function in RodrigoDias123's files that had none (`PlacedOrder`, the order schemas, the test functions), at his request; `app/schemas/orders.py`, `tests/test_order_status.py`, `tests/test_pricing.py`.
 - **Outcome:** kept. The naive path writes the absolute value, as the project guide recommends: the result is a silent lost update (more orders than portions, no error), which shows the race better than a `CHECK` failure (500); both are to be explained in `docs/concurrency.md`. No artificial delay (`pg_sleep`) was needed, because the race showed up without it. `CLAUDE.md` asks for no docstrings on trivial Pydantic schemas; they were added anyway because RodrigoDias123 asked, kept to one line each.
 - **Verification:** `ruff check`, `ruff format --check` and `pytest` passed, and a script confirmed that no class or function in these files is left without a docstring. A scratch script outside the repo ran 60 threads, each in its own transaction, against an item with 30 portions, as `fd_app`: naive mode 3 times → 60 sold, 0 sold out, 0 errors, stock ending at 27, 27 and 28; real mode once → 30 sold, 30 sold out, 0 errors, stock 0. Over HTTP with `uvicorn`: switch on, `?mode=naive` and `?mode=real` → 201, `?mode=fast` → 422; switch off, `?mode=naive` → 404 `naive mode is disabled`, no mode → 201. No 500 in the server log, and the test data was deleted afterwards.
+=======
+## Docker Compose, image and uv project
+
+- **Who:** SRamoras
+- **Tool:** Claude Code
+- **For what:** the Compose file with `postgres`, `mongo`, `redis`, `api` and `dbgate` (profile `tools`), the API image and the uv project; `compose.yml`, `Dockerfile`, `.dockerignore`, `.env.example`, `pyproject.toml`, `uv.lock`
+- **Outcome:** kept, with one fix. The project was made installable so that the scripts in `postgres/`, `mongodb/` and `redis/` can import `app`.
+- **Verification:** `docker compose up -d` from a clean clone, `ruff check` and `ruff format --check`.
+- **Mistakes caught:** the top-level `redis/` folder made ruff sort `import redis` as our own code instead of the redis-py library. The ruff cache hid it on the host, and it was caught with `--no-cache`. Fixed with `known-third-party = ["redis"]` in `pyproject.toml`.
+
+## App base and database setup
+
+- **Who:** SRamoras
+- **Tool:** Claude Code
+- **For what:** settings, connections, error handlers and the health check (`app/config.py`, `app/db/*.py`, `app/errors.py`, `app/main.py`); the setup script that creates the roles, the database and the extensions (`scripts/setup.sh`); the Alembic setup and the default privileges migration (`postgres/alembic.ini`, `postgres/migrations/`); the MongoDB app user and the `ensure_collection` helper (`mongodb/setup.py`)
+- **Outcome:** kept, with one fix to the roles in `setup.sh`.
+- **Verification:** `./scripts/setup.sh` on an empty database after `docker compose up -d`; checked which databases each role can connect to; started the API and called the health check.
+- **Mistakes caught:** the first `setup.sh` only restricted `food_delivery`, so `fd_app` and `fd_readonly` could still connect to the built-in `postgres` and `template1` databases, which every role can by default. Fixed with `REVOKE CONNECT ON DATABASE postgres, template1 FROM PUBLIC`.
+
+## Seed script, Redis skeletons and dev container
+
+- **Who:** SRamoras
+- **Tool:** Claude Code
+- **For what:** the seed script and the `.env` loading it shares with `setup.sh` (`scripts/seed.sh`); the skeletons of `redis/rebuild.py` and `redis/verify.py`; placeholder folders for the seeds and the concurrency tests; the dev container (`.devcontainer/`)
+- **Outcome:** seed script and Redis skeletons kept. The dev container was changed twice: the first version, which started the databases through Compose with an extra `workspace` service, was replaced by a plain Python image, and then by the `docker-in-docker` feature.
+- **Verification:** opened the dev container and ran `ruff` inside it.
+- **Mistakes caught:** the AI's dev container added a separate Compose file and service that the project did not need and did not give a working Docker inside the container; the Compose file was removed and Docker was added.
+
+## README and project guidelines
+
+- **Who:** SRamoras
+- **Tool:** Claude Code
+- **For what:** the README sections on how to run, the stack and the project overview (`README.md`); the AI guidelines and the group plan (`CLAUDE.md`, `planning/`)
+- **Outcome:** kept. The planning files are the group's internal plan, not graded documentation.
+- **Verification:** followed the README commands from a clean clone (`cp .env.example .env`, `docker compose up -d`, `./scripts/setup.sh`).
+- **Mistakes caught:** none.
+
+## Couriers table
+
+- **Who:** SRamoras
+- **Tool:** Claude Code
+- **For what:** the `Courier` model and the migration that creates `couriers`; `app/models/couriers.py`, `app/models/__init__.py`, `postgres/migrations/versions/20261109_df4595780c71_add_couriers_table.py`
+- **Outcome:** kept. The autogenerated migration was reviewed; the long `CHECK` string was split for ruff and a note explains why there is no `GRANT`.
+- **Verification:** `alembic upgrade`, `downgrade -1` and `upgrade` again; `alembic check` reported no differences; as `fd_app`, PostgreSQL refused a bicycle with a plate, a car without one, a repeated plate, email and phone, an unknown vehicle type and status, and changing a car to a bicycle while keeping its plate; two bicycles without a plate were accepted; ruff passed.
+>>>>>>> 6689035 (docs: add ai usage entries for infrastructure and couriers)
 - **Mistakes caught:** none.
