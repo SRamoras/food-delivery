@@ -1,11 +1,47 @@
-"""Daily stock: lazy creation of today's row and the conditional decrement (rule 2)."""
+"""Daily stock: lazy creation of today's row, the conditional decrement (rule 2) and
+its derived copy in Redis."""
 
-from datetime import date
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.config import LISBON
+from app.db.redis import client as redis_client
 from app.errors import Conflict
+
+# A request still in flight at midnight may write yesterday's key; without a margin
+# that key would be born already expired.
+STOCK_TTL_MARGIN = timedelta(hours=1)
+
+
+def stock_key(item_id: int, day: date) -> str:
+    """Redis key of one item's stock on one Lisbon day: fd:stock:{item_id}:{yyyy-mm-dd}."""
+    # Built only from an int and a date, never from raw request text.
+    return f"fd:stock:{item_id}:{day.isoformat()}"
+
+
+def stock_expire_at(day: date) -> int:
+    """Next Lisbon midnight after `day`, plus the margin, as a Unix timestamp for EXAT."""
+    midnight = datetime.combine(day + timedelta(days=1), time(0), tzinfo=LISBON)
+    return int((midnight + STOCK_TTL_MARGIN).timestamp())
+
+
+def write_stock_copies(stock_after: dict[int, int], day: date) -> None:
+    """Copy PG's `remaining` (from RETURNING) to Redis. Call only after the commit.
+
+    SET with the value PG returned, not DECR in Redis: the copy always mirrors the
+    source of truth instead of accumulating its own errors. EXAT goes in the same SET,
+    so a key can never be left without an expiry.
+    """
+    if not stock_after:
+        return
+    exat = stock_expire_at(day)
+    # One round trip for all items; no MULTI needed, each SET stands on its own.
+    pipe = redis_client.pipeline(transaction=False)
+    for item_id, remaining in stock_after.items():
+        pipe.set(stock_key(item_id, day), remaining, exat=exat)
+    pipe.execute()
 
 
 def ensure_today_row(session: Session, item_id: int, day: date) -> None:
