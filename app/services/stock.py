@@ -49,3 +49,34 @@ def take_stock(session: Session, item_id: int, qty: int, day: date) -> int:
     if remaining is None:
         raise Conflict("sold out")
     return remaining
+
+
+def take_stock_naive(session: Session, item_id: int, qty: int, day: date) -> int:
+    """INTENTIONALLY UNSAFE: read, check in Python, write. Shows the lost update of rule 2.
+
+    Only reachable with ?mode=naive and ENABLE_NAIVE_MODE=true (concurrency test and
+    demo). Two requests can both read the same `remaining`, both pass the check, and
+    both write the same new value: two orders, one portion taken.
+    """
+    ensure_today_row(session, item_id, day)
+    # No FOR UPDATE, on purpose: other requests read the same value meanwhile.
+    current = session.execute(
+        text("""
+            SELECT remaining FROM daily_stock
+             WHERE item_id = :item AND stock_date = :day
+        """),
+        {"item": item_id, "day": day},
+    ).scalar_one()
+    if current < qty:
+        raise Conflict("sold out")
+    new_value = current - qty
+    # Absolute value computed in Python: whatever another request wrote between the
+    # SELECT and this UPDATE is overwritten (lost update), with no error at all.
+    session.execute(
+        text("""
+            UPDATE daily_stock SET remaining = :new
+             WHERE item_id = :item AND stock_date = :day
+        """),
+        {"new": new_value, "item": item_id, "day": day},
+    )
+    return new_value

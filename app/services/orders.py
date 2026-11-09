@@ -21,18 +21,23 @@ from app.services.pricing import price_line
 
 @dataclass
 class PlacedOrder:
+    """What place_order returns: the new order and what the caller needs after the commit."""
+
     order: Order
     stock_date: date
     # item_id -> portions left (from RETURNING), written to Redis after the commit.
     stock_after: dict[int, int] = field(default_factory=dict)
 
 
-def place_order(session: Session, customer_id: int, body: PlaceOrderIn) -> PlacedOrder:
+def place_order(
+    session: Session, customer_id: int, body: PlaceOrderIn, *, naive: bool = False
+) -> PlacedOrder:
     """Place an order in the caller's transaction. Any Conflict/NotFound rolls it all back.
 
     Writes the order, its lines, the approved payment and the first history row, and
     takes the daily stock. Only the stock must be exact under concurrency, so only it
     is protected (conditional UPDATE in stock.take_stock); the other checks are reads.
+    naive=True swaps in stock.take_stock_naive, only to show the race.
     """
     # 1. Simulated payment declined: refuse before writing anything.
     if body.simulate == "declined":
@@ -140,8 +145,9 @@ def place_order(session: Session, customer_id: int, body: PlaceOrderIn) -> Place
     for line in body.lines:
         if items[line.item_id]["daily_stock"] is not None:
             qty[line.item_id] += line.quantity
+    take = stock.take_stock_naive if naive else stock.take_stock
     stock_after = {
-        item_id: stock.take_stock(session, item_id, qty[item_id], now.date())
+        item_id: take(session, item_id, qty[item_id], now.date())
         for item_id in sorted(qty)
     }
 
