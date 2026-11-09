@@ -54,6 +54,15 @@
 - **Verification:** applied with `alembic upgrade head` against temporary catalogue tables, which were removed afterwards. Valid rows were accepted as `fd_app`. PostgreSQL refused rows that broke the `CHECK` constraints, the unique indexes and the `RESTRICT` foreign keys. On a real `fd_app` connection, `UPDATE`, `DELETE` and `TRUNCATE` on the history gave `permission denied`. An Alembic comparison found no differences between the models and the database, although it does not compare `CHECK` constraints, and `downgrade` worked. To be repeated with the real tables.
 - **Mistakes caught:** none.
 
+## Catalogue models and migrations
+
+- **Who:** jcleberfernandes
+- **Tool:** Claude Code
+- **For what:** catalogue models (`app/models/geo.py`, `customers.py`, `restaurants.py`, `menu.py`), the two catalogue migrations (`a0f0fea02357`, `cc5a58ef4086`), and pointing `08211037a94a` at `cc5a58ef4086` so that it runs after the tables it depends on. The commits were also made by the tool, at the member's request.
+- **Outcome:** kept. The `EXCLUDE` on opening hours was added by hand to the generated migration. `ON DELETE` choices and the `down_revision` change are to be confirmed by the group.
+- **Verification:** ran upgrade and downgrade; psql tests refused a second default address, an 8-digit NIF and overlapping hours, and accepted adjacent periods and a full day; `setup.sh` from an empty database applied all 5 migrations in order; `alembic check` reported no differences; ruff passed.
+- **Mistakes caught:** the first run from an empty database failed with two Alembic heads, fixed by the `down_revision` change. `alembic check` then reported the order tables as removed because `orders` and `payments` were not imported in `app/models/__init__.py`; the import was added.
+
 ## Order status machine
 
 - **Who:** RodrigoDias123

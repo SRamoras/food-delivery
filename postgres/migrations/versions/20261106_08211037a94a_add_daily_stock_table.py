@@ -1,7 +1,7 @@
 """add daily stock table: portions left per item per Lisbon day, one row per day so no midnight job
 
 Revision ID: 08211037a94a
-Revises: efa3e96d0fe0
+Revises: cc5a58ef4086
 Create Date: 2026-11-06 15:44:24.484731+00:00
 
 """
@@ -13,8 +13,8 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "08211037a94a"
-# Provisional: must point at the catalogue migration that creates menu_items once it lands.
-down_revision: str | Sequence[str] | None = "efa3e96d0fe0"
+# After the catalogue migration, because daily_stock has a FK to menu_items.
+down_revision: str | Sequence[str] | None = "cc5a58ef4086"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
