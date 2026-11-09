@@ -71,3 +71,12 @@
 - **Outcome:** kept, with two decisions by RodrigoDias123. An option group without `max` allows one choice, so groups that allow more (such as removals) need an explicit `max` in jcleberfernandes's catalogue data. The cancel reason is a `Literal` with the 6 fixed reasons, not free text.
 - **Verification:** `ruff check` and `ruff format --check` passed. 8 `pytest` cases without a database: the price with extras is exact (12.60, no float error) and so is the snapshot; an unknown group or choice, a chosen allergen, two choices in a group without `max` and a missing required group give 409; the reason list matches `CANCEL_REASONS`; a reason outside the list fails validation (422).
 - **Mistakes caught:** the guide's draft had the cancel reason as free text. Because of the `CHECK` on `orders.cancel_reason`, a reason outside the list would pass Pydantic and then fail in PostgreSQL as a 500, which `CLAUDE.md` does not allow. The AI pointed this out before writing the code, and the `Literal` that the guide offers for a fixed list was used instead.
+
+## Daily stock decrement
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code
+- **For what:** writing and explaining the lazy creation of today's stock row (`INSERT ... ON CONFLICT DO NOTHING` from `menu_items.daily_stock`) and the conditional decrement that enforces rule 2 (`UPDATE ... WHERE remaining >= :qty RETURNING remaining`, 0 rows → 409); `app/services/stock.py`
+- **Outcome:** kept. The AI wrote the file from the project guide. RodrigoDias123 chose plain SQL in `text()` over the ORM, so the rule 2 statement reads the same in the code, in `CLAUDE.md` and in `docs/concurrency.md`; every value is a bound parameter. The column name `menu_items.daily_stock` was checked in jcleberfernandes's model. Locking items in ascending `item_id` order (to avoid deadlocks) is left to the caller, `place_order`.
+- **Verification:** `ruff check` and `ruff format --check` passed. A scratch script outside the repo, connected as `fd_app` to the real schema: the first call created today's row only for the item with a configured stock, and a second call did not reset it. Then 60 threads, each in its own transaction and released together by a barrier, took 1 portion of an item with 30: 30 succeeded, 30 got "sold out", 0 other errors, the stock ended at 0, and each value from 0 to 29 was returned exactly once. The test data was deleted afterwards.
+- **Mistakes caught:** none.
