@@ -1,4 +1,4 @@
-"""Order life cycle: place (F2) and, later, status updates (F5)."""
+"""Order life cycle: place (F2), kitchen steps and cancel (F5)."""
 
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -15,7 +15,13 @@ from app.models.orders import Order, OrderLine
 from app.models.payments import Payment
 from app.schemas.orders import PlaceOrderIn
 from app.services import stock
-from app.services.order_status import check_transition, record_status
+from app.services.order_status import (
+    change_status,
+    check_transition,
+    lock_order,
+    record_status,
+)
+from app.services.payments import refund_if_paid_online
 from app.services.pricing import price_line
 
 
@@ -199,3 +205,72 @@ def place_order(
     )
     record_status(session, order.id, None, "placed", "customer", customer_id)
     return PlacedOrder(order=order, stock_date=now.date(), stock_after=stock_after)
+
+
+@dataclass
+class StatusChange:
+    """What a status change returns: the order and what to copy to Redis after the commit."""
+
+    order: Order
+    # item_id -> portions left after a cancel gave them back, and that stock's day.
+    stock_after: dict[int, int] = field(default_factory=dict)
+    stock_date: date | None = None
+
+
+def release_and_refund(session: Session, order: Order) -> tuple[dict[int, int], date]:
+    """Stock back + refund, in the caller's transaction, with the order already locked.
+
+    B calls it on cancel; A calls it on reject (F3).
+    """
+    stock_after, day = stock.release_stock(session, order)
+    refund_if_paid_online(session, order.id)
+    return stock_after, day
+
+
+def _check_owner(order: Order, actor_type: str, actor_id: int | None) -> None:
+    """404 if a customer or restaurant acts on an order that is not theirs.
+
+    404, not 403: other customers' and restaurants' orders must not even be confirmed
+    to exist. The back office may act on any order.
+    """
+    owner = {"customer": order.customer_id, "restaurant": order.restaurant_id}.get(
+        actor_type
+    )
+    if actor_type != "backoffice" and owner != actor_id:
+        raise NotFound("order not found")
+
+
+def kitchen_step(
+    session: Session, restaurant_id: int, order_id: int, new: str
+) -> StatusChange:
+    """Restaurant moves its own order to `preparing` or `ready`.
+
+    The order row is locked (lock_order) before the transition is checked, so a cancel
+    and a kitchen step on the same order run one after the other: the second one sees
+    the new status and gets 409.
+    """
+    order = lock_order(session, order_id)
+    _check_owner(order, "restaurant", restaurant_id)
+    change_status(session, order, new, "restaurant", restaurant_id)
+    return StatusChange(order)
+
+
+def cancel_order(
+    session: Session,
+    order_id: int,
+    actor_type: str,
+    actor_id: int | None,
+    reason: str,
+) -> StatusChange:
+    """Cancel before pickup (customer, restaurant or back office): stock back, refund.
+
+    Lock order: the order first (lock_order), then its stock rows (release_stock), the
+    same order every flow uses. Two simultaneous cancels: the second waits for the
+    lock, then sees `cancelled` and gets 409, so stock and refund happen once.
+    Ending the courier's delivery waits for A's deliveries table (step 6.4).
+    """
+    order = lock_order(session, order_id)
+    _check_owner(order, actor_type, actor_id)
+    change_status(session, order, "cancelled", actor_type, actor_id, reason=reason)
+    stock_after, day = release_and_refund(session, order)
+    return StatusChange(order, stock_after, day)
