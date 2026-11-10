@@ -120,11 +120,11 @@ Indexes created by a primary key or a `UNIQUE` constraint are listed with the ru
 | `ix_order_status_history_order_id_changed_at` | Frequent query 5: an order's history in time order. Covers the FK. |
 | `ix_payments_order_id` | An order's payments (refund check). Covers the FK. |
 | `ix_customer_addresses_customer_id` | A customer's addresses (F1, F2). Covers the FK. |
-| `ix_restaurants_zone_id_open` `(zone_id) WHERE status = 'open'` | Frequent query 1 (F1): open restaurants of a zone. *(to do: jcleberfernandes, EXPLAIN query 1.)* |
+| `ix_restaurants_zone_id_open` `(zone_id) WHERE status = 'open'` | Meant for frequent query 1 (F1): open restaurants of a zone. On the seeded data the planner does not use it (see the query 1 EXPLAIN): 1,203 restaurants fit in 24 pages and 93% are open, so a sequential scan is cheaper. |
 | `ix_zone_fees_customer_zone_id` | F1: the restaurant zones that deliver to a customer's zone. The unique index starts with `restaurant_zone_id`, so it cannot serve this. |
 | `ix_menu_categories_restaurant_id`, `ix_menu_items_category_id` | A restaurant's menu (F1, F2). Cover the FKs. |
 | `ix_deliveries_courier_active` `(courier_id) WHERE delivered_at IS NULL` | Frequent query 4 and the rule 3 count: a courier's active deliveries. *(to do: SRamoras, EXPLAIN query 4.)* |
-| `ix_ratings_restaurant_id_created_at` | Frequent query 6: a restaurant's average rating in the last 90 days. |
+| `ix_ratings_restaurant_id_created_at` | Frequent query 6: a restaurant's average rating in the last 90 days. Also the index query 1 depends on: F1 shows each restaurant's average rating. |
 | `ex_opening_periods_no_overlap` (GiST) | Backs the `EXCLUDE` constraint. It also finds a restaurant's periods for a weekday (F1, F2). |
 
 ### EXPLAIN evidence
@@ -138,7 +138,71 @@ docker compose exec -T postgres psql -U postgres -d food_delivery \
 
 #### Query 1: open restaurants delivering to a zone
 
-*(to do: jcleberfernandes.)*
+The query F1 sends (`list_open_restaurants` in `app/services/catalogue.py`), for a customer in zone 1 (Baixa, the zone with most addresses), on a Friday at 13:00. The file is `postgres/sql/explain_catalogue.sql`:
+
+```bash
+docker compose exec -T postgres psql -U postgres -d food_delivery \
+  -v zone=1 -v weekday=4 -v minute=780 -f - < postgres/sql/explain_catalogue.sql
+```
+
+```sql
+SELECT r.id, r.name, r.min_order_value, f.fee AS delivery_fee,
+       (SELECT round(avg(rt.restaurant_score), 2)
+          FROM ratings rt WHERE rt.restaurant_id = r.id) AS average_rating
+  FROM restaurants r
+  JOIN zone_fees f ON f.restaurant_zone_id = r.zone_id
+ WHERE f.customer_zone_id = 1
+   AND r.status = 'open'
+   AND EXISTS (SELECT 1 FROM opening_periods p
+                WHERE p.restaurant_id = r.id AND p.weekday = 4
+                  AND p.hours @> 780)
+ ORDER BY r.name, r.id;
+```
+
+It returns 428 restaurants. The plans below keep the nodes that matter.
+
+**Without `ix_ratings_restaurant_id_created_at`:**
+```
+ Sort  (cost=552804.46..552804.90 rows=176 width=63) (actual time=2761.873..2761.897 rows=428 loops=1)
+   Buffers: shared hit=521457
+   ->  Nested Loop Semi Join  (actual rows=428 loops=1)
+         ->  Hash Join  (actual rows=452 loops=1)
+               Hash Cond: (r.zone_id = f.restaurant_zone_id)
+               ->  Seq Scan on restaurants r  (actual rows=1116 loops=1)
+                     Filter: ((status)::text = 'open'::text)
+               ->  Bitmap Index Scan on ix_zone_fees_customer_zone_id  (actual rows=9 loops=1)
+         ->  Index Only Scan using ex_opening_periods_no_overlap on opening_periods p  (actual rows=1 loops=452)
+               Index Cond: ((restaurant_id = r.id) AND (hours @> 780))
+         SubPlan 1
+           ->  Aggregate  (actual time=5.806..5.806 rows=1 loops=428)
+                 ->  Seq Scan on ratings rt  (cost=0.00..3139.20 rows=128 width=2) (actual time=0.108..5.816 rows=131 loops=428)
+                       Filter: (restaurant_id = r.id)
+                       Rows Removed by Filter: 153725
+ Execution Time: 2779.384 ms
+```
+
+**With it:**
+```
+ Sort  (cost=67023.77..67024.21 rows=176 width=63) (actual time=52.711..52.735 rows=428 loops=1)
+   Buffers: shared hit=43079
+   ->  Nested Loop Semi Join  (actual rows=428 loops=1)
+         ->  Hash Join  (actual rows=452 loops=1)
+               ->  Seq Scan on restaurants r  (actual rows=1116 loops=1)
+               ->  Bitmap Index Scan on ix_zone_fees_customer_zone_id  (actual rows=9 loops=1)
+         ->  Index Only Scan using ex_opening_periods_no_overlap on opening_periods p  (actual rows=1 loops=452)
+         SubPlan 1
+           ->  Aggregate  (actual time=0.094..0.094 rows=1 loops=428)
+                 ->  Bitmap Heap Scan on ratings rt  (actual rows=131 loops=428)
+                       ->  Bitmap Index Scan on ix_ratings_restaurant_id_created_at  (cost=0.00..5.38 rows=128 width=0) (actual time=0.012..0.012 rows=131 loops=428)
+                             Index Cond: (restaurant_id = r.id)
+ Execution Time: 52.797 ms
+```
+
+**Reading:**
+- **Where the time goes:** the average rating is a subquery that runs once per restaurant found (`loops=428`). Without the index, each run reads all 153,856 ratings to keep about 131, which comes to 521k buffers and 2.8 s. With it, each run goes straight to that restaurant's ratings: 43k buffers and 53 ms, about 50 times faster.
+- **Opening hours:** the GiST index behind the `EXCLUDE` constraint also answers "is it open at 13:00?" (`Index Only Scan`, `hours @> 780`). No extra index is needed for it.
+- **Zone:** `ix_zone_fees_customer_zone_id` finds the 9 restaurant zones that deliver to zone 1.
+- **`ix_restaurants_zone_id_open` is not used:** the planner reads `restaurants` sequentially in both plans. The table has 1,203 rows in 24 pages and 1,116 of them are open, so the partial index filters almost nothing and a sequential scan is cheaper. Dropping it inside the transaction gives the same plan.
 
 #### Query 2: a customer's orders, newest first, 20 per page
 
