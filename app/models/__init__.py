@@ -12,5 +12,6 @@ from app.models import (  # noqa: F401
     offers,
     orders,
     payments,
+    ratings,
     restaurants,
 )
