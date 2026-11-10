@@ -1,4 +1,4 @@
-"""Order endpoints: place (F2), kitchen steps and cancel (F5)."""
+"""Order endpoints: place (F2), kitchen steps, cancel and courier steps (F5)."""
 
 from typing import Literal
 
@@ -95,4 +95,24 @@ def backoffice_cancel(order_id: int, body: CancelIn) -> StatusOut:
         change = order_service.cancel_order(
             session, order_id, "backoffice", None, body.reason
         )
+    return _status_out(change)
+
+
+@router.post(
+    "/couriers/{courier_id}/deliveries/{order_id}/picked-up", response_model=StatusOut
+)
+def mark_picked_up(courier_id: int, order_id: int) -> StatusOut:
+    """Courier picks up a ready order from the restaurant."""
+    with SessionLocal() as session, session.begin():
+        change = order_service.courier_step(session, courier_id, order_id, "picked_up")
+    return _status_out(change)
+
+
+@router.post(
+    "/couriers/{courier_id}/deliveries/{order_id}/delivered", response_model=StatusOut
+)
+def mark_delivered(courier_id: int, order_id: int) -> StatusOut:
+    """Courier hands a picked-up order to the customer."""
+    with SessionLocal() as session, session.begin():
+        change = order_service.courier_step(session, courier_id, order_id, "delivered")
     return _status_out(change)

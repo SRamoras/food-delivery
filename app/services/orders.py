@@ -1,18 +1,21 @@
-"""Order life cycle: place (F2), kitchen steps and cancel (F5)."""
+"""Order life cycle: place (F2), kitchen steps, cancel and courier steps (F5)."""
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.config import LISBON
 from app.errors import Conflict, NotFound
+from app.models.offers import Delivery, DeliveryOffer
 from app.models.orders import Order, OrderLine
 from app.models.payments import Payment
+from app.models.restaurants import Restaurant
 from app.schemas.orders import PlaceOrderIn
 from app.services import stock
 from app.services.order_status import (
@@ -215,6 +218,8 @@ class StatusChange:
     # item_id -> portions left after a cancel gave them back, and that stock's day.
     stock_after: dict[int, int] = field(default_factory=dict)
     stock_date: date | None = None
+    # Set by the courier steps, so the tracking hash gets the courier.
+    courier_id: int | None = None
 
 
 def release_and_refund(session: Session, order: Order) -> tuple[dict[int, int], date]:
@@ -267,10 +272,65 @@ def cancel_order(
     Lock order: the order first (lock_order), then its stock rows (release_stock), the
     same order every flow uses. Two simultaneous cancels: the second waits for the
     lock, then sees `cancelled` and gets 409, so stock and refund happen once.
-    Ending the courier's delivery waits for A's deliveries table (step 6.4).
+    Pending offers are withdrawn, so no courier can accept a cancelled order.
+    Ending a delivery a courier already accepted waits for the marker agreed with
+    A in `deliveries` (step 6.4).
     """
     order = lock_order(session, order_id)
     _check_owner(order, actor_type, actor_id)
     change_status(session, order, "cancelled", actor_type, actor_id, reason=reason)
     stock_after, day = release_and_refund(session, order)
+    session.execute(
+        update(DeliveryOffer)
+        .where(DeliveryOffer.order_id == order.id, DeliveryOffer.outcome == "pending")
+        .values(outcome="withdrawn")
+    )
     return StatusChange(order, stock_after, day)
+
+
+def distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> Decimal:
+    """Straight-line (haversine) distance in km, rounded to 2 decimals.
+
+    The brief has no road distances, so the restaurant-to-address line is the measure.
+    """
+    earth_radius_km = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    km = 2 * earth_radius_km * math.asin(math.sqrt(a))
+    return Decimal(str(round(km, 2)))
+
+
+def courier_step(
+    session: Session, courier_id: int, order_id: int, new: str
+) -> StatusChange:
+    """Courier marks their delivery `picked_up` (from `ready`) or `delivered`.
+
+    The order row is locked first, as in every flow, so a cancel and a pickup on the
+    same order run one after the other: if the cancel wins, the pickup sees
+    `cancelled` and gets 409. The delivery row is only written under that lock.
+    A delivery that is not this courier's → 404, like any order that is not yours.
+    """
+    order = lock_order(session, order_id)
+    delivery = session.execute(
+        select(Delivery).where(
+            Delivery.order_id == order_id, Delivery.courier_id == courier_id
+        )
+    ).scalar_one_or_none()
+    if delivery is None:
+        raise NotFound("delivery not found")
+    change_status(session, order, new, "courier", courier_id)
+    # now() is the transaction start, the same moment the history row gets, so the
+    # CHECKs on deliveries (picked_up_at >= accepted_at, ...) compare PG clocks only.
+    if new == "picked_up":
+        delivery.picked_up_at = func.now()
+    else:
+        delivery.delivered_at = func.now()
+        rest = session.get(Restaurant, order.restaurant_id)
+        delivery.distance_km = distance_km(
+            float(rest.lat),
+            float(rest.lng),
+            float(order.delivery_lat),
+            float(order.delivery_lng),
+        )
+    return StatusChange(order, courier_id=courier_id)
