@@ -170,3 +170,12 @@
 - **Outcome:** kept. Two choices beyond the plan: `/position` only works while the online key exists (the check is inside the Lua script, so it is atomic with the write), which means PostgreSQL is read only by `/online` and the blocked check runs there; and `/offline` is idempotent. `order_id` in the trail is left for when `deliveries` exists (C-4).
 - **Verification:** ruff passed; with the API running locally: `/online` → 200 and the courier showed in `GEOSEARCH ... BYRADIUS 3 km` with the online key at `TTL 30`; `/position` → 200 and a second document in `courier_positions`; blocked courier → 409, unknown courier → 404, longitude 200 → 422, `/position` before `/online` or after `/offline` → 409; after 31 s without positions the online key was gone and `/position` gave 409. Test rows, keys and documents were removed.
 - **Mistakes caught:** none.
+
+## courier_positions collection
+
+- **Who:** SRamoras
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** the `courier_positions` collection in `mongodb/setup.py`: `$jsonSchema` validator, 7-day TTL index and `{courier_id: 1, recorded_at: -1}` index
+- **Outcome:** kept the validator and the two indexes. No 2dsphere index, because no query uses it yet and every index must serve a query.
+- **Verification:** ran `setup.py` twice (idempotent); as `fd_app`, inserted valid and invalid documents (missing `courier_id`, string date, latitude out of range, unknown field), and the invalid ones were refused with code 121; `list_indexes()` shows `expireAfterSeconds: 604800`.
+- **Mistakes caught:** none in the output. Noted that integer coordinates would be refused by the `double` type, so the seed must write floats.
