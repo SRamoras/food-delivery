@@ -138,68 +138,23 @@ Use `set -euo pipefail` so it stops at the first error.
 - ✅ **Done when:** from a clean clone, `cp .env.example .env && docker compose up -d && ./scripts/setup.sh && ./scripts/seed.sh` runs end to end (even with an almost empty seed).
 
 ## Step I-8 — Dev container (optional, for the group)
-The dev container is **not in the repo yet**. Create a `.devcontainer/` folder in the repo root with two files. They add a `workspace` container (Python 3.12, uv, Docker CLI, editor extensions) next to the three databases, so the three of you have the same environment without installing anything.
+**Done.** `.devcontainer/devcontainer.json` gives the three of you the same environment (Python 3.12, uv, Docker, editor extensions) without installing anything on the host.
 
-`.devcontainer/devcontainer.json`:
-```jsonc
-{
-  "name": "Food delivery",
-  // the project's compose.yml + the extra "workspace" service below
-  "dockerComposeFile": ["../compose.yml", "compose.devcontainer.yml"],
-  "service": "workspace",
-  // databases + workspace; not "api" (run uvicorn in the workspace) and not "dbgate" (profile tools)
-  "runServices": ["postgres", "mongo", "redis", "workspace"],
-  "shutdownAction": "stopCompose",
-  "workspaceFolder": "/workspaces/food-delivery",
-  // Docker CLI inside, talking to the host's Docker: setup.sh and seed.sh use "docker compose exec"
-  "features": { "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {} },
-  "containerEnv": { "UV_LINK_MODE": "copy" },
-  "postCreateCommand": "pip install --user uv && uv sync",
-  "forwardPorts": [8000, 3000],
-  "customizations": {
-    "vscode": {
-      "extensions": [
-        "ms-python.python",
-        "charliermarsh.ruff",
-        "ms-azuretools.vscode-docker",
-        "mongodb.mongodb-vscode",
-        "anthropic.claude-code"
-      ],
-      "settings": {
-        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python"
-      }
-    }
-  }
-}
-```
+How it was built:
+- **Base image** `mcr.microsoft.com/devcontainers/base:bookworm`, plus three features: `docker-in-docker:2` (`moby: true`), `python:1` (3.12) and `astral.sh-uv:1`.
+- **Docker in Docker:** the container has its own Docker daemon. `docker compose up -d` inside it starts `postgres`, `mongo` and `redis` there, with the ports from `compose.yml` published on the container's `127.0.0.1`, so the `.env` URLs work unchanged and `setup.sh` / `seed.sh` can use `docker compose exec`.
+- **No extra Compose file and no `workspace` service:** the dev container is only the tooling; the databases always come from the project's `compose.yml`.
+- **Extensions:** Python, Ruff, Docker, MongoDB and Claude Code.
+- `.devcontainer/devcontainer-lock.json` pins the feature versions; it is committed.
 
-`.devcontainer/compose.devcontainer.yml` (paths are relative to the **first** compose file, the repo root; `${...}` comes from the root `.env`; inside Docker the databases are reached by service name, not `127.0.0.1`):
-```yaml
-services:
-  workspace:
-    image: mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
-    command: sleep infinity
-    volumes:
-      - .:/workspaces/food-delivery:cached
-    depends_on:
-      postgres: { condition: service_healthy }
-      mongo: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    environment:
-      POSTGRES_SUPERUSER_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres
-      MIGRATION_DATABASE_URL: postgresql+psycopg://fd_owner:${FD_OWNER_PASSWORD}@postgres:5432/food_delivery
-      DATABASE_URL: postgresql+psycopg://fd_app:${FD_APP_PASSWORD}@postgres:5432/food_delivery
-      READONLY_DATABASE_URL: postgresql+psycopg://fd_readonly:${FD_READONLY_PASSWORD}@postgres:5432/food_delivery
-      MONGO_ROOT_URL: mongodb://root:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
-      MONGO_URL: mongodb://fd_app:${MONGO_APP_PASSWORD}@mongo:27017/food_delivery?authSource=food_delivery
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-```
+Why not the first versions:
+- The first version added a `workspace` service through `compose.devcontainer.yml` next to the databases, with its own copy of the connection URLs. It was more to maintain than the group needed, so it was removed.
+- `docker-outside-of-docker` (Docker CLI talking to the host's daemon) failed to install on the Python image because of a broken Yarn apt repo, and depended on the host's Docker setup. Docker in Docker avoids both.
 
-To make it work with your `compose.yml`:
-- the three databases need **healthchecks** (the workspace waits for them);
-- `compose.yml` starts with `name: food-delivery` (step I-1);
-- the variable names above must match your `.env.example`;
-- test it: VS Code → "Dev Containers: Reopen in Container" → in the terminal, `./scripts/setup.sh`, `./scripts/seed.sh`, `uv run uvicorn app.main:app --host 0.0.0.0 --reload` → `http://127.0.0.1:8000/docs` opens.
+Use it:
+- VS Code → "Dev Containers: Reopen in Container".
+- In the terminal: `cp .env.example .env` (if missing), `uv sync` (there is no `postCreateCommand`), `docker compose up -d`, `./scripts/setup.sh`, `./scripts/seed.sh`, `uv run uvicorn app.main:app --host 0.0.0.0 --reload`.
+- The databases inside the dev container are separate from the ones on the host: data created on one side is not seen on the other.
 - Nothing may depend on it: the README commands on the host must keep working without it.
 - ✅ **Done when:** B and C can open the repo in the dev container and run the API without installing anything else.
 
