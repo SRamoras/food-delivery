@@ -4,4 +4,14 @@ Add one import per file as the models are written, e.g.:
     from app.models import couriers, orders  # noqa: F401
 """
 
-from app.models import customers, geo, menu, orders, payments, restaurants  # noqa: F401
+from app.models import (  # noqa: F401
+    couriers,
+    customers,
+    geo,
+    menu,
+    offers,
+    orders,
+    payments,
+    ratings,
+    restaurants,
+)

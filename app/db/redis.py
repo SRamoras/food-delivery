@@ -28,5 +28,6 @@ def load_script(name: str) -> Script:
     return client.register_script((SCRIPTS_DIR / f"{name}.lua").read_text())
 
 
-# Scripts are registered here as they are written, e.g.:
-# courier_position = load_script("courier_position")
+# Scripts are registered here as they are written.
+courier_position = load_script("courier_position")
+fill_tracking = load_script("fill_tracking")

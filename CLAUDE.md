@@ -1,9 +1,9 @@
 # CLAUDE.md — Project B: Food delivery
 
 Context for AI assistants working in this repository. Read this before writing code, schema or docs.
-The full rules are in `planning/course-rules.md` (the module's group project rules, copied from the module repo) and `planning/b-food-delivery.md` (the business brief). If this file disagrees with them, they win; point out the conflict instead of guessing.
+The full rules are in `planning/challenge/README.md` (the module's group project rules, copied from the module repo) and `planning/challenge/b-food-delivery.md` (the business brief). If this file disagrees with them, they win; point out the conflict instead of guessing.
 
-Two different READMEs: "the course rules" means `planning/course-rules.md`. `README.md` in the repo root is **this project's** README (what it does, how to run it, ER diagram, endpoints, authors table), which the course rules ask us to write.
+Two different READMEs: "the course rules" means `planning/challenge/README.md`. `README.md` in the repo root is **this project's** README (what it does, how to run it, ER diagram, endpoints, authors table), which the course rules ask us to write.
 
 ## What this project is
 
@@ -78,7 +78,8 @@ pyproject.toml / uv.lock
 README.md
 CLAUDE.md
 planning/                     internal group planning (not graded docs): PLAN.md, one file per member,
-                              course-rules.md and b-food-delivery.md (copies of the trainer's files)
+                              challenge/ (copies of the trainer's files: README.md = course rules,
+                              b-food-delivery.md = business brief)
 
 app/
   main.py                     FastAPI app, routers, exception handlers
@@ -430,4 +431,4 @@ Report pipelines to implement (at least 3 of the brief's 6): **1** delivery time
 
 ## Deadline
 
-Delivery = highest SemVer tag (e.g. `v1.0.0`) pushed **before session 19 starts**. Go through the delivery checklist at the end of `planning/course-rules.md` first.
+Delivery = highest SemVer tag (e.g. `v1.0.0`) pushed **before session 19 starts**. Go through the delivery checklist at the end of `planning/challenge/README.md` first.
