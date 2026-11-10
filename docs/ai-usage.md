@@ -251,3 +251,102 @@
 - **Outcome:** kept. The pipeline reads every order of the window, not only cancelled ones, so it can give the rate. The `report_orders` validator, the export and the F8 route are jcleberfernandes's and not merged yet, so the sub-schema is not applied by `setup.py` yet and the pipeline is not in `REPORTS` yet.
 - **Verification:** on a temporary collection with the sub-schema as validator (dropped afterwards), filled with 137k documents built from the seeded PostgreSQL orders of the last 100 days: the four invalid documents tried (cancelled without actor, delivered with `cancelled_by`, unknown reason, date as string) were refused and a rejected order with a reason was accepted; the pipeline returned 1,065 restaurants and its total of cancellations (6,275) matched a `count(*)` in PostgreSQL for the same 90 days. `ruff check`, `ruff format --check` and `pytest` passed. Checked on GitHub that no other branch (`cleber`, `SRamoras`, `main`) already had pipeline 4, and that `mongodb/setup.py` on `cleber` is still the same as on `main`, so the new sub-schema does not conflict with it.
 - **Mistakes caught:** none.
+
+## Kitchen capacity (rule 4)
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** `ensure_kitchen_room` in the new `app/services/kitchen.py` (lock the restaurant row with `FOR UPDATE`, count its orders in `accepted`/`preparing`/`ready`, 409 when the count reached `kitchen_capacity`), for SRamoras to call inside F3 accept; the kitchen capacity section of the new `docs/postgres.md` (where and how the rule is enforced, why a lock, why in the app).
+- **Outcome:** kept. F3 accept is SRamoras's and does not exist yet, so the function is not called by any endpoint yet.
+- **Verification:** a script against the local database (rows created as the owner and deleted afterwards) did what F3 accept will do: lock the order, call the function, set `accepted`, in one transaction. Capacity 2 with 2 orders in preparation → the third accept got 409; after a cancel it got through. 10 simultaneous accepts with one slot left: with the function, 1 accepted and 9 refused, three times; with the same count without `FOR UPDATE`, all 10 accepted (11 active for capacity 2), three times. `ruff check`, `ruff format --check` and `pytest` passed.
+- **Mistakes caught:** none.
+
+## Orders seed: orders still in progress
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** `postgres/seed/orders.py`: today's orders now go up to 5 minutes ago. Each order keeps only the steps of its timeline that already happened, so the most recent ones stay `placed`, `accepted`, `preparing`, `ready` or `picked_up`. A future cancel or reject is not written yet. The seed respects the kitchen capacity: an order that would go over it stays `placed`. Orders still in progress keep their stock. `postgres/sql/explain_orders.sql`: frequent queries 2 and 3, without and with their index.
+- **Outcome:** kept. Found while writing the `EXPLAIN` for query 3: every seeded order was finished, so the kitchen screen query returned 0 rows and showed nothing.
+- **Verification:** reseeded on the temporary catalogue: 533 orders in progress (at about 19:40 Lisbon time), 0 restaurants over capacity, 0 history rows in the future, 0 cancel fields on orders not yet cancelled; the earlier checks (history order, last status, today's stock, refunds, opening hours, subtotals) still all 0. `ruff check`, `ruff format --check` and `pytest` passed.
+- **Mistakes caught:** none.
+
+## PostgreSQL, concurrency and runbook documentation
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:**
+  - `docs/postgres.md`: tables, both lists of "Where the rules are enforced" with the constraint or code for each, denormalisations, indexes with their query, `EXPLAIN (ANALYZE, BUFFERS)` of queries 2 and 3 without and with the index, indexed and not-indexed FKs;
+  - `docs/concurrency.md`: isolation level, rule 2 with the naive version and the 6 last-portions outputs, the order lock for status changes, rule 4 with its test;
+  - `docs/runbook.md`: the PostgreSQL section.
+  
+  Sections of other members are left as marked to-dos.
+- **Outcome:** kept. The constraint, index, FK and grant lists were taken from the live database (`pg_constraint`, `pg_indexes`, `information_schema.role_table_grants`), not written from memory. The last-portions outputs come from the temporary runner and must be taken again with the shared `run.py`.
+- **Verification:**
+  - the `EXPLAIN` outputs were run on the seeded data (418k orders);
+  - the backup and restore A commands were run as written: a dump to the host, then a restore into a scratch database, which matched the original in row counts, `alembic_version`, 103 constraints and the history grant, and was then dropped;
+  - restore B (point in time) is not drilled, and the runbook says so.
+- **Mistakes caught:**
+  - the first restore failed on `COMMENT ON EXTENSION btree_gist`, which only the superuser can set; `--no-comments` was added to the documented command;
+  - restore B first moved the data directory itself, which is the volume's mount point and cannot be moved; it now moves the directory's contents.
+
+## Commits for the seed update and the documentation
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** at RodrigoDias123's explicit request, Claude Code ran `git add` and `git commit` for the seed update (`postgres/seed/orders.py`, `postgres/sql/explain_orders.sql`), the documentation (`docs/postgres.md`, `docs/concurrency.md`, `docs/runbook.md`) and these ai-usage entries, as three separate commits. Before that it checked what is still open in RodrigoDias123's slice.
+- **Outcome:** kept. The commits use RodrigoDias123's own git identity and have no `Co-authored-by` line, so they count for this member as the course rules require. Local files that are not part of the project (`PROGRESS-B.md`, `Claude./`) were left out.
+- **Verification:** `git config user.email` checked before committing; `git status` after each commit showed only the intended files staged; `ruff check`, `ruff format --check` and `pytest` passed before committing.
+- **Mistakes caught:** none.
+## F3: restaurant accepts, rejects and reoffers
+
+- **Who:** SRamoras
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** accept (with offers to nearby couriers), reject and reoffer, and the kitchen capacity check that F3 accept calls; `app/services/offers.py`, `app/routers/offers.py`, `app/schemas/offers.py`, `check_kitchen_capacity` in `app/services/orders.py` (RodrigoDias123's file, written with his agreement), `app/main.py`
+- **Outcome:** kept. Offers still inside their 45 s stay `pending` on reoffer; only older ones become `expired`. Choosing couriers with room is only a first pass; F4 re-checks with the courier row locked.
+- **Verification:** an end-to-end script against the running API, 3 runs: 4 simultaneous accepts with kitchen capacity 2 gave 2 × 200 and 2 × 409 every time; offers went to the 5 nearest online, active couriers within 3 km (far, offline and blocked left out); `fd:offer:{id}` had TTL 45; reoffer offered new couriers only, expired offers older than 45 s, skipped a full bicycle and refused an order with a courier; reject gave the stock back, refunded MB WAY and wrote the history. No 5xx. ruff and pytest passed.
+- **Mistakes caught:** the first version subtracted a `timedelta` from `text("now()")`, which raised a 500 on reoffer; changed to `func.now()`. The AI first made a new list of kitchen statuses instead of reusing `ACTIVE_KITCHEN_STATUSES`.
+
+## F4: courier accepts or declines an offer
+
+- **Who:** SRamoras
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** the real version of the courier's accept (rule 1, one courier per order, and rule 3, vehicle limit) and decline, with lazy expiry of offers older than 45 s; `app/services/courier_offers.py`, `app/routers/offers.py`, `app/schemas/offers.py`
+- **Outcome:** kept. Locks go order → offer → courier, the same order as cancel and reoffer (order, then its offers), so they wait for each other instead of deadlocking; the offer is read once without a lock only to learn its order. An expired offer gets 409 and is written `expired` in a second short transaction, because the 409 rolls back the first. `IntegrityError` is turned into 409 only for the two rule 1 constraints; anything else stays a 500. The naive version is the next step.
+- **Verification:** an end-to-end script against the running API, 3 runs of 3: 50 simultaneous accepts of one order gave 1 × 200 and 49 × 409 every time, with one row in `deliveries` and 1 accepted + 49 withdrawn offers; a scooter with one active delivery accepting two offers at the same time gave 200 + 409 every time and ended with 2 active deliveries; someone else's offer → 404; accept twice, after another courier won, after decline, after cancel, after 45 s (outcome written `expired`) and by a blocked courier → 409; tracking got the courier; the order's `fd:offer` keys were deleted; a cancelled order's delivery did not count for the vehicle limit. No 5xx. The F3 script still passed. ruff and pytest passed.
+- **Mistakes caught:** none in the code. The plan's sketch locked the offer before the order; the AI pointed out that cancel and reoffer lock the order first and then update its offers, which could deadlock, and changed the order. The `IntegrityError` branch is not reached in real mode (the order lock prevents it), so it was not exercised by the test.
+
+## F4 naive mode
+
+- **Who:** SRamoras
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** the intentionally unsafe `?mode=naive` version of the courier's accept, used only by the concurrency test and the demo; `accept_offer_naive` in `app/services/courier_offers.py`, the `mode` parameter in `app/routers/offers.py`
+- **Outcome:** kept. Read, check in Python and write, with no `FOR UPDATE` and no `IntegrityError` catch, so the race surfaces. The delivery is flushed on its own before any offer row is touched, so the losers fail on `UNIQUE (order_id)` instead of deadlocking on the offer rows. With `ENABLE_NAIVE_MODE=false` the naive path answers 404, as in F2.
+- **Verification:** an end-to-end script against the running API, 3 runs of 3: 50 simultaneous naive accepts of one order gave 1 × 200 and between 25 and 39 × 500 (`uq_deliveries_order_id` violations in the API log), and PostgreSQL still had one delivery, because the unique is the last guarantee; a scooter with one active delivery accepting two offers at the same time in naive mode got 200 + 200 and 3 active deliveries every time (limit 2: the write skew). The real-mode script still passed (1 × 200 + 49 × 409, scooter 200 + 409). A second API with `ENABLE_NAIVE_MODE=false` answered 404; `mode=bogus` → 422. ruff and pytest passed.
+- **Mistakes caught:** the first test run stopped with `httpx.ReadError`: after a 500, uvicorn closes the keep-alive connection and httpx reused it. Fixed in the test client by turning keep-alive off; the concurrency script `tests/concurrency/run.py` needs the same.
+
+## "Same order" concurrency scenario
+
+- **Who:** SRamoras
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** the fixture, attack and check of the "same order" scenario (rule 1) for the shared runner; `tests/concurrency/same_order.py`
+- **Outcome:** kept. Same interface as RodrigoDias123's `last_portions.py` (`fixture()`, `attack(ctx, mode, base_url)`, `check(ctx)`), so jcleberfernandes's `run.py` can call both the same way. The fixture writes 1 `accepted` order, 50 active cars and 50 `pending` offers straight to PostgreSQL, so the scenario does not depend on F2, F3 or F7. The reset runs as the owner and only deletes rows found by fixed NIF and emails. The attack turns HTTP keep-alive off, because uvicorn closes the connection after a 500 and a reused one fails in the client.
+- **Verification:** run 3 times per mode through a stand-in for `run.py` (fixture, attack, count, check, exit code) against the running API: real mode gave 1 × 200, 49 × 409, 0 × 5xx, one delivery and one accepted offer every time (exit 0); naive mode gave 1 × 200 and 37–39 × 500 from `uq_deliveries_order_id`. ruff and pytest passed.
+- **Mistakes caught:** none.
+
+## Couriers, offers, deliveries and positions seed
+
+- **Who:** SRamoras
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** the PostgreSQL seed of couriers, delivery offers and deliveries built from RodrigoDias123's seeded orders and status history, and the MongoDB seed of the courier position trail; `postgres/seed/couriers.py`, `mongodb/seed.py`
+- **Outcome:** kept. 2,500 couriers (35% bicycle, 45% scooter, 20% car, 2% blocked) with a home city, so offers and deliveries stay local; Zipf skew per city. Offers come in waves (sometimes an expired first wave, sometimes other couriers withdrawn or declining); the accept is within 45 s and before pickup; orders in the kitchen have a courier about half the time; rule 3 is respected for deliveries still active now. Positions: one point per minute for deliveries of the last 7 days, riding to the restaurant and then to the customer with `order_id`; PostgreSQL is read as `fd_readonly`. Both seeds skip when their data already exists.
+- **Verification:** run on a throwaway catalogue (jcleberfernandes's seed does not exist yet) plus RodrigoDias123's orders seed (415k orders): 385,603 deliveries, one for every `picked_up`/`delivered` order, 1.55 offers per delivery, every delivery with exactly one accepted offer from the same courier, no accept later than 45 s or before its offer, no offer before the restaurant accepted, at most 1/2/3 active deliveries per bicycle/scooter/car, top 10% of couriers with 59% of deliveries, no blocked courier with work; 536,776 positions (191,451 with `order_id`), all inside the last 7 days. Couriers seed 11 s, positions seed 5 s. A second run of each skipped. ruff and pytest passed. Not yet checked: that two runs from an empty database give the same rows.
+- **Mistakes caught:** a comment said blocked couriers keep their past deliveries, but the seed gives them none; the comment was corrected. ruff flagged an unused import and two `str.split` name lists, fixed before the commit. Open point for RodrigoDias123: the history rows for `picked_up` and `delivered` have no courier `actor_id`, because couriers are seeded after orders.
+
+## "Vehicle limit" concurrency scenario (extension)
+
+- **Who:** SRamoras
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** the rule 3 test scenario for the shared runner; `tests/concurrency/vehicle_limit.py`
+- **Outcome:** kept. Same interface as `same_order.py`. A scooter (limit 2) with 1 active delivery gets 5 pending offers for 5 different accepted orders and accepts them all at once. The plan said 2 offers; 5 make the race certain to show in naive mode and the expected result stays simple (exactly one more fits). Each accept writes a different order's delivery, so no unique constraint helps: only the `FOR UPDATE` on the courier row does (write skew).
+- **Verification:** 3 runs per mode through the stand-in runner against the running API: real mode gave 1 × 200, 4 × 409, 0 × 5xx and 2 active deliveries every time (exit 0); naive mode gave 5 × 200 and 6 active deliveries every time, with no error at all (exit 1). The same order scenario still passed. ruff and pytest passed.
+- **Mistakes caught:** none.
