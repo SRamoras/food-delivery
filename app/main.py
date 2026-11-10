@@ -9,8 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import mongo, postgres, redis
 from app.errors import register_exception_handlers
-from app.routers import orders
-from app.routers import couriers
+from app.routers import couriers, orders
 
 app = FastAPI(title="Food delivery API")
 register_exception_handlers(app)
