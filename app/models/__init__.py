@@ -9,6 +9,7 @@ from app.models import (  # noqa: F401
     customers,
     geo,
     menu,
+    offers,
     orders,
     payments,
     restaurants,
