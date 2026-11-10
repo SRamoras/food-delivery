@@ -350,3 +350,30 @@
 - **Outcome:** kept. Same interface as `same_order.py`. A scooter (limit 2) with 1 active delivery gets 5 pending offers for 5 different accepted orders and accepts them all at once. The plan said 2 offers; 5 make the race certain to show in naive mode and the expected result stays simple (exactly one more fits). Each accept writes a different order's delivery, so no unique constraint helps: only the `FOR UPDATE` on the courier row does (write skew).
 - **Verification:** 3 runs per mode through the stand-in runner against the running API: real mode gave 1 × 200, 4 × 409, 0 × 5xx and 2 active deliveries every time (exit 0); naive mode gave 5 × 200 and 6 active deliveries every time, with no error at all (exit 1). The same order scenario still passed. ruff and pytest passed.
 - **Mistakes caught:** none.
+
+## Report export, ranking, concurrency runner and catalogue seed
+
+- **Who:** jcleberfernandes
+- **Tool:** Claude Code
+- **For what:** the `report_orders` and `report_offers` validators and index in `mongodb/setup.py`; `mongodb/export_reports.py`; the last-hour ranking in `app/services/ranking.py`; the shared runner `tests/concurrency/run.py` (and registering SRamoras's `vehicle-limit` scenario in it); the catalogue and ratings seeds (`postgres/seed/catalogue.py`, `postgres/seed/ratings.py`). Merging `origin/main` into `cleber`. The commits were also made by the tool, at the member's request.
+- **Outcome:** kept. The merge had one conflict, in `app/main.py` (both sides added a router to the same import line); both routers were kept.
+- **Verification:** `setup.sh` and `seed.sh` from empty volumes: 5 cities, 51 zones, 60,000 customers, 90,066 addresses, 1,200 restaurants, 28,300 items, 153,856 ratings (about 40% of delivered orders), with no constraint refusing a row. The export wrote 414,345 orders and 597,425 offers through the validators in about 2 minutes. The runner gave the same output format for the 3 scenarios in both modes: real mode kept every rule with no 5xx, naive mode broke rules 2 and 3 and gave 5xx for rule 1.
+- **Mistakes caught:** none in the code. The whole seed was not timed in one run (the session ended in the middle), so the 5-minute limit is still to be measured.
+
+## Redis rebuild and verify for tracking and ranking
+
+- **Who:** jcleberfernandes
+- **Tool:** Claude Code
+- **For what:** `rebuild_tracking`, `rebuild_ranking`, `verify_tracking` and `verify_ranking` in `redis/rebuild.py` and `redis/verify.py`; `track_rows` and `track_fields` in `app/services/tracking.py` and `window_keys` and `recent_deliveries` in `app/services/ranking.py`, so the app, the rebuild and the verify read PG the same way.
+- **Outcome:** kept. Only orders not finished get a tracking hash on rebuild; a finished order fills its hash on the next cache miss. `verify_tracking` does not count a missing key as a difference (cache-aside).
+- **Verification:** `rebuild.py` wrote 144 tracking hashes and 147 ranking buckets, and `verify.py` reported 0 differences. A tracking status and a ranking score were then changed by hand: `verify.py` reported both and exited 1, and after `rebuild.py` it exited 0 again. A cache miss on a picked-up order filled the hash with its courier and TTL 86400.
+- **Mistakes caught:** the cache miss in `_fill_from_postgres` did not read the courier, and its docstring said A's `deliveries` table did not exist yet; it now joins `deliveries`.
+
+## Evidence and documentation (F8, F6, query 1, MongoDB, architecture)
+
+- **Who:** jcleberfernandes
+- **Tool:** Claude Code
+- **For what:** registering RodrigoDias123's pipeline 4 in F8 (`app/services/reports.py`, the router docstring); the tracking cache evidence for `docs/redis.md`; `postgres/sql/explain_catalogue.sql` and the query 1 section of `docs/postgres.md`; `docs/mongodb.md`; the MongoDB section of `docs/runbook.md`; `docs/architecture.md`; the ER diagram in `README.md`.
+- **Outcome:** kept, with one finding to decide as a group: the planner does not use `ix_restaurants_zone_id_open` for query 1 (1,203 restaurants in 24 pages, 93% open), so the EXPLAIN drops `ix_ratings_restaurant_id_created_at` instead, the index the query really depends on (2.8 s without it, 53 ms with it).
+- **Verification:** the 3 pipelines answered 200 through `GET /backoffice/reports/{name}` (0.2 s to 1.1 s) and an unknown name answered 404. With `PG_LOG_STATEMENT=all` and `MONITOR`, the first track request ran one SELECT and the second ran only `HGETALL` and `GEOPOS`, with no PostgreSQL line. `explain("executionStats")` on pipeline 1's `$match`: `COLLSCAN` over 414,345 documents (396 ms) without the index, `IXSCAN` over 39,792 (41 ms) with it. The `mongodump`/`mongorestore` commands of the runbook were run into a scratch database: 531,803 documents, the TTL index and the validator came back. The ER diagram was checked against the 26 foreign keys in `pg_constraint`.
+- **Mistakes caught:** pipeline 4 was missing from F8 although the plan lists it; the API container had to be rebuilt to serve it, because the image holds a copy of the code. `backups/` is not in `.gitignore`, so the test dump was deleted.
