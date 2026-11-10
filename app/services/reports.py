@@ -6,12 +6,13 @@ from typing import Any
 from app.db import mongo
 from app.errors import NotFound
 from app.schemas.reports import ReportResult
-from mongodb.pipelines import delivery_time, restaurant_times
+from mongodb.pipelines import cancellations, delivery_time, restaurant_times
 
-# Report name in the URL → (collection, pipeline builder). Pipeline 4 (B) goes here too.
+# Report name in the URL → (collection, pipeline builder). Pipeline 4 is B's.
 REPORTS: dict[str, tuple[str, Callable[[], list[dict[str, Any]]]]] = {
     "delivery-time": (delivery_time.COLLECTION, delivery_time.build),
     "restaurant-times": (restaurant_times.COLLECTION, restaurant_times.build),
+    "cancellations": (cancellations.COLLECTION, cancellations.build),
 }
 
 
