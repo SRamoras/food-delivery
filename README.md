@@ -62,6 +62,8 @@ uv run python tests/concurrency/run.py --scenario same-order --mode real      # 
 uv run python tests/concurrency/run.py --scenario same-order --mode naive
 uv run python tests/concurrency/run.py --scenario last-portions --mode real   # 60 orders, 30 portions: 30 placed, stock 0
 uv run python tests/concurrency/run.py --scenario last-portions --mode naive
+uv run python tests/concurrency/run.py --scenario vehicle-limit --mode real   # extension: a scooter with 1 delivery accepts 5 offers: 1 fits
+uv run python tests/concurrency/run.py --scenario vehicle-limit --mode naive
 ```
 
 The script exits with 1 if the rule is broken (or, in real mode, on any 5xx), else 0. The naive paths only exist while `ENABLE_NAIVE_MODE=true` in `.env`. Outputs and explanation: [docs/concurrency.md](docs/concurrency.md).
@@ -284,7 +286,9 @@ _To do: endpoints per flow (F1–F8) and how the actor is identified (`/customer
 
 ## Extensions done
 
-_To do._
+- **Rule 3 test scenario (vehicle limit):** `tests/concurrency/vehicle_limit.py`, naive and real modes. Outputs in [docs/concurrency.md](docs/concurrency.md).
+
+_Others: to do._
 
 ## Documentation
 
