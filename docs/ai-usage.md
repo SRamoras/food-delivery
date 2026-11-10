@@ -215,3 +215,12 @@
 - **Outcome:** kept. Two parts are still open: ending a delivery a courier already accepted when the order is cancelled (step 6.4) waits for the marker to be agreed with SRamoras in `deliveries`, and the ranking call on `delivered` waits for jcleberfernandes's function.
 - **Verification:** `ruff check`, `ruff format --check` and `pytest` passed. With PostgreSQL and Redis running and the test data deleted afterwards: one order went `placed → … → delivered` through the API (the accept and the delivery row were written directly, standing in for F3/F4); pickup while `accepted` → 409, pickup by another courier → 404, pickup and delivered twice → 409, cancel after pickup → 409; the delivery row had times in order and a distance; six history rows; the tracking hash showed `delivered` with the courier; a cancel withdrew a pending offer, gave the stock back and added the refund; `redis/verify.py` exited 0.
 - **Mistakes caught:** none in the code. ruff flagged `Decimal("270")` in the new test (FURB157), fixed to `Decimal(270)`.
+
+## Merge of main and pull request description
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** bringing `main` (SRamoras's PR #12 and jcleberfernandes's PR #13) into the `Rodrigo` branch and resolving the conflict in `docs/ai-usage.md`; writing the title and description of the pull request for steps 5 to 7.
+- **Outcome:** kept. The conflict was two sets of entries added at the end of this file; both were kept, the other members' entries first. The first merge was aborted and redone so that it also included PR #13, leaving a single merge commit. The PR description lists what is still open (cancel after a courier accepted, ranking call) instead of hiding it.
+- **Verification:** no conflict markers left; `alembic heads` showed a single head; `ruff check`, `ruff format --check` and `pytest` passed and `app.main` imported after the merge; `git merge-tree` against `origin/main` reported no conflicts before opening the PR.
+- **Mistakes caught:** the merge was first done without PR #13, which had been merged into `main` in the meantime; it was aborted and redone before committing.
