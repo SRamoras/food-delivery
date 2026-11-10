@@ -323,3 +323,12 @@
 - **Outcome:** kept. Read, check in Python and write, with no `FOR UPDATE` and no `IntegrityError` catch, so the race surfaces. The delivery is flushed on its own before any offer row is touched, so the losers fail on `UNIQUE (order_id)` instead of deadlocking on the offer rows. With `ENABLE_NAIVE_MODE=false` the naive path answers 404, as in F2.
 - **Verification:** an end-to-end script against the running API, 3 runs of 3: 50 simultaneous naive accepts of one order gave 1 × 200 and between 25 and 39 × 500 (`uq_deliveries_order_id` violations in the API log), and PostgreSQL still had one delivery, because the unique is the last guarantee; a scooter with one active delivery accepting two offers at the same time in naive mode got 200 + 200 and 3 active deliveries every time (limit 2: the write skew). The real-mode script still passed (1 × 200 + 49 × 409, scooter 200 + 409). A second API with `ENABLE_NAIVE_MODE=false` answered 404; `mode=bogus` → 422. ruff and pytest passed.
 - **Mistakes caught:** the first test run stopped with `httpx.ReadError`: after a 500, uvicorn closes the keep-alive connection and httpx reused it. Fixed in the test client by turning keep-alive off; the concurrency script `tests/concurrency/run.py` needs the same.
+
+## "Same order" concurrency scenario
+
+- **Who:** SRamoras
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** the fixture, attack and check of the "same order" scenario (rule 1) for the shared runner; `tests/concurrency/same_order.py`
+- **Outcome:** kept. Same interface as RodrigoDias123's `last_portions.py` (`fixture()`, `attack(ctx, mode, base_url)`, `check(ctx)`), so jcleberfernandes's `run.py` can call both the same way. The fixture writes 1 `accepted` order, 50 active cars and 50 `pending` offers straight to PostgreSQL, so the scenario does not depend on F2, F3 or F7. The reset runs as the owner and only deletes rows found by fixed NIF and emails. The attack turns HTTP keep-alive off, because uvicorn closes the connection after a 500 and a reused one fails in the client.
+- **Verification:** run 3 times per mode through a stand-in for `run.py` (fixture, attack, count, check, exit code) against the running API: real mode gave 1 × 200, 49 × 409, 0 × 5xx, one delivery and one accepted offer every time (exit 0); naive mode gave 1 × 200 and 37–39 × 500 from `uq_deliveries_order_id`. ruff and pytest passed.
+- **Mistakes caught:** none.
