@@ -3,7 +3,8 @@
     uv run python tests/concurrency/run.py --scenario same-order --mode real
     uv run python tests/concurrency/run.py --scenario last-portions --mode naive
 
-Each scenario is a module next to this file (A: same_order.py, B: last_portions.py) with
+Each scenario is a module next to this file (A: same_order.py and vehicle_limit.py,
+B: last_portions.py) with
     fixture() -> ctx                              reset and create the data in PostgreSQL
     await attack(ctx, mode, base_url) -> codes    fire the requests at the same time
     check(ctx) -> (holds, detail)                 does the rule hold in PostgreSQL?
@@ -16,7 +17,11 @@ import importlib
 import sys
 
 # Scenario name on the command line -> module in this folder.
-SCENARIOS = {"same-order": "same_order", "last-portions": "last_portions"}
+SCENARIOS = {
+    "same-order": "same_order",
+    "last-portions": "last_portions",
+    "vehicle-limit": "vehicle_limit",
+}
 
 
 def main() -> int:
