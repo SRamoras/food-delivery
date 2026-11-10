@@ -8,14 +8,22 @@ courier sends.
 """
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import text
 
 from app.config import LISBON
 from app.db.postgres import SessionLocal
 from app.db.redis import client
+from app.models.orders import Order
+from app.services.ranking import RANK_TTL_SECONDS, bucket_key, recent_deliveries
 from app.services.stock import stock_expire_at, stock_key
+from app.services.tracking import (
+    TRACK_TTL_SECONDS,
+    track_fields,
+    track_key,
+    track_rows,
+)
 
 
 def rebuild_offers() -> int:
@@ -46,14 +54,49 @@ def rebuild_stock() -> int:
     return len(rows)
 
 
+def _delete_matching(pattern: str) -> None:
+    # SCAN, never KEYS: it walks the keyspace in small batches without blocking Redis.
+    stale = list(client.scan_iter(match=pattern, count=1000))
+    if stale:
+        client.delete(*stale)
+
+
 def rebuild_tracking() -> int:
-    """C: fd:order:{id}:track for orders that are not finished yet."""
-    return 0
+    """C: fd:order:{id}:track for orders that are not finished yet.
+
+    Finished orders are left out: nobody tracks them for long, and a request for one
+    fills its key from PG on the cache miss.
+    """
+    _delete_matching("fd:order:*:track")
+    with SessionLocal() as session:
+        rows = session.execute(
+            track_rows().where(
+                Order.status.not_in(["delivered", "cancelled", "rejected"])
+            )
+        ).all()
+    # One MULTI: each HSET has its EXPIRE in the same transaction, as in the app.
+    pipe = client.pipeline(transaction=True)
+    for row in rows:
+        pipe.hset(track_key(row.id), mapping=track_fields(row))
+        pipe.expire(track_key(row.id), TRACK_TTL_SECONDS)
+    pipe.execute()
+    return len(rows)
 
 
 def rebuild_ranking() -> int:
     """C: fd:rank:{city_id}:{minute} buckets from the last hour of deliveries in PG."""
-    return 0
+    _delete_matching("fd:rank:*")
+    rows = recent_deliveries(datetime.now(UTC))
+    pipe = client.pipeline(transaction=True)
+    keys = set()
+    for city_id, restaurant_id, delivered_at in rows:
+        # Same key and TTL as record_delivery, in the same MULTI.
+        key = bucket_key(city_id, delivered_at)
+        pipe.zincrby(key, 1, restaurant_id)
+        pipe.expire(key, RANK_TTL_SECONDS)
+        keys.add(key)
+    pipe.execute()
+    return len(keys)
 
 
 # Each function returns how many keys it wrote.
