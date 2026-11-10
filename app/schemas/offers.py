@@ -22,3 +22,12 @@ class OfferedOut(BaseModel):
     id: int
     status: str
     offers: list[SentOfferOut]
+
+
+class OfferAnswerOut(BaseModel):
+    """Answer of a courier's accept or decline (F4): the offer and its new outcome."""
+
+    offer_id: int
+    order_id: int
+    courier_id: int
+    outcome: str
