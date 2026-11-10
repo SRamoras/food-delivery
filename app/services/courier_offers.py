@@ -194,3 +194,58 @@ def delete_offer_keys(offer_ids: list[int]) -> None:
         redis.client.delete(*(offer_key(i) for i in offer_ids))
     except Exception:
         log.exception("fd:offer delete failed for offers %s", offer_ids)
+
+
+def accept_offer_naive(session: Session, courier_id: int, offer_id: int) -> OfferAnswer:
+    """INTENTIONALLY UNSAFE: read, check in Python, write, with no lock. Shows rules 1 and 3 break.
+
+    Only reachable with ?mode=naive and ENABLE_NAIVE_MODE=true (concurrency test and
+    demo). Simultaneous accepts of one order all read "no courier yet" and all try to
+    insert a delivery: UNIQUE (order_id) refuses all but one, and the violation is not
+    caught, so it surfaces as a 500. Two accepts by one courier for different orders
+    both count the same free slot and both insert: the vehicle limit is exceeded with
+    no error at all (write skew).
+    """
+    # No FOR UPDATE anywhere, on purpose: other requests read the same rows meanwhile.
+    row = session.execute(
+        select(
+            DeliveryOffer,
+            DeliveryOffer.sent_at > func.now() - timedelta(seconds=OFFER_TTL_SECONDS),
+        ).where(DeliveryOffer.id == offer_id, DeliveryOffer.courier_id == courier_id)
+    ).one_or_none()
+    if row is None:
+        raise NotFound("offer not found")
+    offer, fresh = row
+    if offer.outcome != "pending":
+        raise Conflict(f"offer is {offer.outcome}")
+    if not fresh:
+        raise Conflict("offer has expired")
+    order = session.get(Order, offer.order_id)
+    taken = session.execute(
+        select(Delivery.id).where(Delivery.order_id == order.id)
+    ).first()
+    if taken is not None:
+        raise Conflict("order already has a courier")
+    courier = session.get(Courier, courier_id)
+    if (
+        count_active_deliveries(session, courier_id)
+        >= VEHICLE_CAPACITY[courier.vehicle_type]
+    ):
+        raise Conflict(f"no room left on the {courier.vehicle_type}")
+
+    session.add(Delivery(order_id=order.id, courier_id=courier_id))
+    # Delivery first, alone: a loser then fails on UNIQUE (order_id) before it touches
+    # any offer row, so the race shows as a unique violation and not as a deadlock.
+    session.flush()
+    offer.outcome = "accepted"
+    withdrawn = session.execute(
+        update(DeliveryOffer)
+        .where(
+            DeliveryOffer.order_id == order.id,
+            DeliveryOffer.id != offer.id,
+            DeliveryOffer.outcome == "pending",
+        )
+        .values(outcome="withdrawn")
+        .returning(DeliveryOffer.id)
+    ).scalars()
+    return OfferAnswer(offer, order, [offer.id, *withdrawn])
