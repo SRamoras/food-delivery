@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import LISBON
 from app.errors import Conflict, NotFound
 from app.models.offers import Delivery, DeliveryOffer
-from app.models.orders import ACTIVE_KITCHEN_STATUSES, Order, OrderLine
+from app.models.orders import Order, OrderLine
 from app.models.payments import Payment
 from app.models.restaurants import Restaurant
 from app.schemas.orders import PlaceOrderIn
@@ -230,33 +230,6 @@ def release_and_refund(session: Session, order: Order) -> tuple[dict[int, int], 
     stock_after, day = stock.release_stock(session, order)
     refund_if_paid_online(session, order.id)
     return stock_after, day
-
-
-def check_kitchen_capacity(session: Session, restaurant_id: int) -> None:
-    """Rule 4: 409 if the restaurant already has kitchen_capacity orders in the kitchen.
-
-    Write skew without the lock: two accepts both count "one slot left" and both
-    write a different order row. FOR UPDATE on the restaurant row makes accepts for
-    the same restaurant queue up, so the second counts after the first committed.
-    Called by A inside F3 accept, after the order is locked (order → restaurant).
-    """
-    capacity = session.execute(
-        select(Restaurant.kitchen_capacity)
-        .where(Restaurant.id == restaurant_id)
-        .with_for_update()
-    ).scalar_one()
-    # Same status list as the partial index ix_orders_restaurant_active, so the
-    # count reads only that small index.
-    in_kitchen = session.execute(
-        select(func.count())
-        .select_from(Order)
-        .where(
-            Order.restaurant_id == restaurant_id,
-            Order.status.in_(ACTIVE_KITCHEN_STATUSES),
-        )
-    ).scalar_one()
-    if in_kitchen >= capacity:
-        raise Conflict("kitchen is at full capacity")
 
 
 def _check_owner(order: Order, actor_type: str, actor_id: int | None) -> None:

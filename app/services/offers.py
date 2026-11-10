@@ -14,13 +14,9 @@ from app.models.offers import OFFER_TTL_SECONDS, Delivery, DeliveryOffer
 from app.models.orders import ACTIVE_KITCHEN_STATUSES, Order
 from app.models.restaurants import Restaurant
 from app.services.couriers import GEO_KEY, online_key
+from app.services.kitchen import ensure_kitchen_room
 from app.services.order_status import change_status, check_transition, lock_order
-from app.services.orders import (
-    StatusChange,
-    _check_owner,
-    check_kitchen_capacity,
-    release_and_refund,
-)
+from app.services.orders import StatusChange, _check_owner, release_and_refund
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +47,7 @@ def accept_order(session: Session, restaurant_id: int, order_id: int) -> Offered
     """Restaurant accepts its `placed` order (rule 4 checked) and offers it to couriers.
 
     Locks in a fixed order: the order row (lock_order), then the restaurant row
-    (check_kitchen_capacity). Two accepts of the same order: the second waits, sees
+    (ensure_kitchen_room). Two accepts of the same order: the second waits, sees
     `accepted` and gets 409. Two accepts for the same restaurant: the second counts
     the kitchen only after the first committed, so capacity is never exceeded.
     """
@@ -60,7 +56,7 @@ def accept_order(session: Session, restaurant_id: int, order_id: int) -> Offered
     # Transition first: an order that is no longer `placed` gets 409 without
     # taking the restaurant lock, which every accept of that restaurant waits for.
     check_transition(order.status, "accepted", "restaurant")
-    check_kitchen_capacity(session, order.restaurant_id)
+    ensure_kitchen_room(session, order.restaurant_id)
     change_status(session, order, "accepted", "restaurant", restaurant_id)
     return Offered(order, _offer_to_nearby(session, order))
 
