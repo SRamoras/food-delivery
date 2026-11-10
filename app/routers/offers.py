@@ -1,11 +1,14 @@
 """Delivery offers: restaurant accept, reject, reoffer (F3) and courier accept, decline (F4)."""
 
 from collections.abc import Callable
+from typing import Literal
 
 from fastapi import APIRouter
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db.postgres import SessionLocal
+from app.errors import NotFound
 from app.schemas.offers import OfferAnswerOut, OfferedOut, RejectIn, SentOfferOut
 from app.schemas.orders import StatusOut
 from app.services import courier_offers
@@ -105,8 +108,16 @@ def _answer_offer(
 @router.post(
     "/couriers/{courier_id}/offers/{offer_id}/accept", response_model=OfferAnswerOut
 )
-def accept_offer(courier_id: int, offer_id: int) -> OfferAnswerOut:
+def accept_offer(
+    courier_id: int, offer_id: int, mode: Literal["real", "naive"] = "real"
+) -> OfferAnswerOut:
     """Courier accepts an offer: only the first valid accept wins, the others get 409."""
+    if mode == "naive":
+        # With the switch off, the naive path does not exist (404), so it cannot be
+        # used by accident outside the concurrency test and the demo.
+        if not settings.enable_naive_mode:
+            raise NotFound("naive mode is disabled")
+        return _answer_offer(courier_id, offer_id, courier_offers.accept_offer_naive)
     return _answer_offer(courier_id, offer_id, courier_offers.accept_offer)
 
 
