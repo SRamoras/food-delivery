@@ -1,10 +1,14 @@
-"""Restaurant decisions and delivery offers: accept, reject, reoffer (F3)."""
+"""Delivery offers: restaurant accept, reject, reoffer (F3) and courier accept, decline (F4)."""
+
+from collections.abc import Callable
 
 from fastapi import APIRouter
+from sqlalchemy.orm import Session
 
 from app.db.postgres import SessionLocal
-from app.schemas.offers import OfferedOut, RejectIn, SentOfferOut
+from app.schemas.offers import OfferAnswerOut, OfferedOut, RejectIn, SentOfferOut
 from app.schemas.orders import StatusOut
+from app.services import courier_offers
 from app.services import offers as service
 from app.services.orders import StatusChange
 from app.services.side_effects import after_status_change
@@ -67,3 +71,48 @@ def backoffice_reoffer(order_id: int) -> OfferedOut:
     with SessionLocal() as session, session.begin():
         offered = service.reoffer_order(session, order_id, "backoffice", None)
     return _offered_out(offered, status_changed=False)
+
+
+def _answer_offer(
+    courier_id: int,
+    offer_id: int,
+    answer: Callable[[Session, int, int], courier_offers.OfferAnswer],
+) -> OfferAnswerOut:
+    """Run accept or decline in one transaction, then the Redis writes."""
+    try:
+        with SessionLocal() as session, session.begin():
+            result = answer(session, courier_id, offer_id)
+    except courier_offers.OfferExpired:
+        # The failed transaction rolled back; write `expired` in a new one, then
+        # still answer 409.
+        with SessionLocal() as session, session.begin():
+            courier_offers.mark_expired(session, offer_id)
+        courier_offers.delete_offer_keys([offer_id])
+        raise
+    courier_offers.delete_offer_keys(result.closed_offer_ids)
+    if result.order is not None:
+        # The status does not change; the tracking hash gets the courier.
+        after_status_change(StatusChange(result.order, courier_id=courier_id))
+    offer = result.offer
+    return OfferAnswerOut(
+        offer_id=offer.id,
+        order_id=offer.order_id,
+        courier_id=offer.courier_id,
+        outcome=offer.outcome,
+    )
+
+
+@router.post(
+    "/couriers/{courier_id}/offers/{offer_id}/accept", response_model=OfferAnswerOut
+)
+def accept_offer(courier_id: int, offer_id: int) -> OfferAnswerOut:
+    """Courier accepts an offer: only the first valid accept wins, the others get 409."""
+    return _answer_offer(courier_id, offer_id, courier_offers.accept_offer)
+
+
+@router.post(
+    "/couriers/{courier_id}/offers/{offer_id}/reject", response_model=OfferAnswerOut
+)
+def decline_offer(courier_id: int, offer_id: int) -> OfferAnswerOut:
+    """Courier declines a pending offer."""
+    return _answer_offer(courier_id, offer_id, courier_offers.decline_offer)
