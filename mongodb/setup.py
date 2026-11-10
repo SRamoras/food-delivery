@@ -129,6 +129,60 @@ COURIER_POSITIONS_INDEXES = [
     IndexModel([("courier_id", 1), ("recorded_at", -1)], name="courier_id_recorded_at"),
 ]
 
+# report_orders: the fields pipeline 4 (cancellations, B) reads. A self-contained
+# sub-schema, so C's report_orders validator includes it with
+# {"$jsonSchema": {"allOf": [<C's schema>, REPORT_ORDERS_CANCEL_SCHEMA]}}.
+ORDER_STATUSES = [
+    "placed",
+    "accepted",
+    "preparing",
+    "ready",
+    "picked_up",
+    "delivered",
+    "cancelled",
+    "rejected",
+]
+# Same lists as the CHECKs on orders in PostgreSQL, so an export bug is refused here.
+CANCEL_REASONS = [
+    "customer_changed_mind",
+    "restaurant_too_busy",
+    "item_unavailable",
+    "courier_unavailable",
+    "payment_issue",
+    "other",
+]
+CANCEL_ACTORS = ["customer", "restaurant", "backoffice"]
+
+REPORT_ORDERS_CANCEL_SCHEMA: dict[str, Any] = {
+    "bsonType": "object",
+    "required": ["restaurant_id", "restaurant_name", "status", "placed_at"],
+    "properties": {
+        "restaurant_id": {"bsonType": ["int", "long"], "minimum": 1},
+        "restaurant_name": {"bsonType": "string"},
+        "status": {"enum": ORDER_STATUSES},
+        # BSON dates: the pipeline filters on placed_at (last 90 days).
+        "placed_at": {"bsonType": "date"},
+        "cancelled_at": {"bsonType": "date"},
+        # Also allowed on a rejected order (the restaurant may give a reason).
+        "cancel_reason": {"enum": CANCEL_REASONS},
+        "cancelled_by": {"enum": CANCEL_ACTORS},
+    },
+    # As in PostgreSQL: a cancelled order always says who cancelled, why and when;
+    # any other order has no cancelled_by. ($jsonSchema has no if/then: oneOf does it.)
+    "oneOf": [
+        {
+            "properties": {"status": {"enum": ["cancelled"]}},
+            "required": ["cancelled_by", "cancel_reason", "cancelled_at"],
+        },
+        {
+            "properties": {
+                "status": {"enum": [s for s in ORDER_STATUSES if s != "cancelled"]}
+            },
+            "not": {"required": ["cancelled_by"]},
+        },
+    ],
+}
+
 
 def main() -> None:
     settings = SetupSettings()
@@ -146,7 +200,7 @@ def main() -> None:
         COURIER_POSITIONS_VALIDATOR,
         COURIER_POSITIONS_INDEXES,
     )
-    # C: report_orders, report_offers (B adds the pipeline 4 fields)
+    # C: report_orders, report_offers (B's pipeline 4 fields: REPORT_ORDERS_CANCEL_SCHEMA)
 
     client.close()
 
