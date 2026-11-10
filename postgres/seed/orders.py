@@ -20,6 +20,7 @@ from typing import Any
 import psycopg
 
 from app.config import LISBON, settings
+from app.models.orders import ACTIVE_KITCHEN_STATUSES
 
 random.seed(42)
 
@@ -63,8 +64,10 @@ def pick(cum: list[float]) -> int:
 
 def load_catalogue(cur: psycopg.Cursor) -> dict[str, Any]:
     """Read what C's seed created: restaurants, hours, fees, addresses and items."""
-    cur.execute("SELECT id, zone_id, min_order_value FROM restaurants ORDER BY id")
-    restaurants = {r: (z, m) for r, z, m in cur.fetchall()}
+    cur.execute(
+        "SELECT id, zone_id, min_order_value, kitchen_capacity FROM restaurants ORDER BY id"
+    )
+    restaurants = {r: (z, m, k) for r, z, m, k in cur.fetchall()}
 
     hours: dict[int, dict[int, list[tuple[int, int]]]] = defaultdict(
         lambda: defaultdict(list)
@@ -113,7 +116,7 @@ def load_catalogue(cur: psycopg.Cursor) -> dict[str, Any]:
     # Only restaurants that can really take an order: hours, items, a delivered zone.
     usable = [
         r
-        for r, (z, _) in restaurants.items()
+        for r, (z, _, _) in restaurants.items()
         if hours.get(r) and menus.get(r) and any(cz in addresses for cz, _ in fees[z])
     ]
     return {
@@ -142,7 +145,7 @@ def order_time(
 ) -> datetime | None:
     """A moment inside the restaurant's opening hours (Lisbon), peaks more likely.
 
-    Today only up to 2 hours ago, so every seeded order is already finished.
+    Today up to 5 minutes ago: the most recent orders are still in progress.
     """
     for _ in range(20):
         day = today - timedelta(days=DAYS - 1 - pick(day_cum))
@@ -151,7 +154,7 @@ def order_time(
             continue
         lo, hi = random.choice(slots)
         if day == today:
-            hi = min(hi, now_min - 120)
+            hi = min(hi, now_min - 5)
             if hi <= lo:
                 continue
         minute = random.randrange(lo, hi)
@@ -230,15 +233,18 @@ def main() -> None:
 
         # Today's stock: only today's row is ever read (lazy reset), so only it is kept.
         stock_today: dict[int, int] = {}
+        # Orders each restaurant has in accepted/preparing/ready right now (rule 4).
+        active: dict[int, int] = defaultdict(int)
         totals = defaultdict(int)
         for start in range(0, len(drafts), BATCH):
             rows = build_batch(
                 cat,
                 drafts[start : start + BATCH],
-                today,
+                now,
                 speed,
                 zone_slowness,
                 stock_today,
+                active,
                 totals,
             )
             copy_batch(cur, with_real_ids(cur, rows))
@@ -258,14 +264,17 @@ def main() -> None:
 def build_batch(
     cat: dict[str, Any],
     drafts: list[tuple[datetime, int]],
-    today: date,
+    now: datetime,
     speed: dict[int, float],
     zone_slowness: dict[int, float],
     stock_today: dict[int, int],
+    active: dict[int, int],
     totals: dict[str, int],
 ) -> dict[str, list[tuple]]:
     """Turn (time, restaurant) drafts into rows for the four tables.
 
+    Each order gets a full planned timeline, then keeps only the steps that already
+    happened: old orders are finished, the last minutes' orders are still in progress.
     Orders are numbered 0, 1, 2... inside the batch; with_real_ids swaps in the ids.
     """
     out: dict[str, list[tuple]] = {
@@ -274,9 +283,10 @@ def build_batch(
         "payments": [],
         "history": [],
     }
+    today = now.date()
     oid = -1
     for at, r in drafts:
-        rest_zone, min_value = cat["restaurants"][r]
+        rest_zone, min_value, capacity = cat["restaurants"][r]
         reachable = [
             (cz, fee) for cz, fee in cat["fees"][rest_zone] if cz in cat["addresses"]
         ]
@@ -284,17 +294,69 @@ def build_batch(
         addr_list, addr_cum = cat["addresses"][cust_zone]
         addr = addr_list[pick(addr_cum)]
         customer = addr[1]
-
-        r_roll = random.random()
-        outcome = (
-            "rejected"
-            if r_roll < REJECTED
-            else ("cancelled" if r_roll < REJECTED + CANCELLED else "delivered")
-        )
         is_today = at.date() == today
-        # Stock is taken when placed and given back on cancel/reject, so only
-        # delivered orders of today use up today's stock.
-        takes_stock = is_today and outcome == "delivered"
+
+        # Timeline: each step a few minutes after the last, slower at peak hours
+        # (Lisbon lunch and dinner).
+        peak = 1.3 if 720 <= at.hour * 60 + at.minute <= 840 or at.hour >= 19 else 1.0
+        # Then UTC: adding minutes to a Lisbon time adds wall-clock minutes, which
+        # goes backwards on the night the clocks change.
+        at = at.astimezone(UTC)
+        s = speed[r]
+        steps = {
+            "placed": at,
+            "accepted": at + timedelta(minutes=random.uniform(1, 6) * s),
+        }
+        steps["preparing"] = steps["accepted"] + timedelta(
+            minutes=random.uniform(0.5, 3)
+        )
+        steps["ready"] = steps["preparing"] + timedelta(
+            minutes=random.triangular(8, 35, 15) * s * peak
+        )
+        steps["picked_up"] = steps["ready"] + timedelta(minutes=random.uniform(2, 10))
+        steps["delivered"] = steps["picked_up"] + timedelta(
+            minutes=random.uniform(6, 22) * zone_slowness[cust_zone] * peak
+        )
+        who = {
+            "placed": ("customer", customer),
+            "accepted": ("restaurant", r),
+            "preparing": ("restaurant", r),
+            "ready": ("restaurant", r),
+            # Couriers are seeded after orders (A's seed), so the id is unknown here.
+            "picked_up": ("courier", None),
+            "delivered": ("courier", None),
+        }
+
+        # How the order will end; events = (status, when, actor type, actor id).
+        r_roll = random.random()
+        cancel_reason = cancelled_by = None
+        if r_roll < REJECTED:
+            cancel_reason = random.choices(*REJECT_REASONS)[0]
+            end = at + timedelta(minutes=random.uniform(1, 5))
+            events = [
+                ("placed", at, *who["placed"]),
+                ("rejected", end, "restaurant", r),
+            ]
+        elif r_roll < REJECTED + CANCELLED:
+            last = random.choices(*CANCEL_FROM)[0]
+            cancelled_by = random.choices(*CANCEL_ACTOR)[0]
+            cancel_reason = random.choices(*CANCEL_REASONS[cancelled_by])[0]
+            end = steps[last] + timedelta(minutes=random.uniform(1, 8))
+            actor_id = {"customer": customer, "restaurant": r}.get(cancelled_by)
+            events = [
+                (st, steps[st], *who[st]) for st in FLOW[: FLOW.index(last) + 1]
+            ] + [("cancelled", end, cancelled_by, actor_id)]
+        else:
+            events = [(st, steps[st], *who[st]) for st in FLOW]
+        # Only what already happened. "placed" is always in the past (order_time).
+        events = [e for e in events if e[1] <= now]
+        status = events[-1][0]
+        if status != "cancelled":
+            cancelled_by = None  # the cancel is still in the future
+            if status != "rejected":
+                cancel_reason = None
+        # Stock is taken when placed and given back on cancel/reject.
+        takes_stock = is_today and status not in ("cancelled", "rejected")
 
         menu, menu_cum = cat["menus"][r]
         n_lines = random.choices(*LINES_PER_ORDER)[0]
@@ -339,62 +401,17 @@ def build_batch(
             for item_id, _, qty, _, _, daily in lines:
                 if daily is not None:
                     stock_today[item_id] = stock_today.get(item_id, daily) - qty
-        # Timeline: each step a few minutes after the last, slower at peak hours
-        # (Lisbon lunch and dinner).
-        peak = 1.3 if 720 <= at.hour * 60 + at.minute <= 840 or at.hour >= 19 else 1.0
-        # Then UTC: adding minutes to a Lisbon time adds wall-clock minutes, which
-        # goes backwards on the night the clocks change.
-        at = at.astimezone(UTC)
-        s = speed[r]
-        steps = {
-            "placed": at,
-            "accepted": at + timedelta(minutes=random.uniform(1, 6) * s),
-        }
-        steps["preparing"] = steps["accepted"] + timedelta(
-            minutes=random.uniform(0.5, 3)
-        )
-        steps["ready"] = steps["preparing"] + timedelta(
-            minutes=random.triangular(8, 35, 15) * s * peak
-        )
-        steps["picked_up"] = steps["ready"] + timedelta(minutes=random.uniform(2, 10))
-        steps["delivered"] = steps["picked_up"] + timedelta(
-            minutes=random.uniform(6, 22) * zone_slowness[cust_zone] * peak
-        )
-
-        who = {
-            "placed": ("customer", customer),
-            "accepted": ("restaurant", r),
-            "preparing": ("restaurant", r),
-            "ready": ("restaurant", r),
-            # Couriers are seeded after orders (A's seed), so the id is unknown here.
-            "picked_up": ("courier", None),
-            "delivered": ("courier", None),
-        }
-        cancel_reason = cancelled_by = None
-        if outcome == "delivered":
-            reached = FLOW
-            end = steps["delivered"]
-        elif outcome == "rejected":
-            reached = ["placed"]
-            end = at + timedelta(minutes=random.uniform(1, 5))
-            cancel_reason = random.choices(*REJECT_REASONS)[0]
-        else:
-            last = random.choices(*CANCEL_FROM)[0]
-            reached = FLOW[: FLOW.index(last) + 1]
-            end = steps[last] + timedelta(minutes=random.uniform(1, 8))
-            cancelled_by = random.choices(*CANCEL_ACTOR)[0]
-            cancel_reason = random.choices(*CANCEL_REASONS[cancelled_by])[0]
+        # Rule 4: a full kitchen would not have accepted it, so it is still waiting.
+        if status in ACTIVE_KITCHEN_STATUSES:
+            if active[r] >= capacity:
+                events, status = events[:1], "placed"
+            else:
+                active[r] += 1
 
         prev = None
-        for st in reached:
-            out["history"].append((oid, prev, st, *who[st], steps[st]))
+        for st, when, actor_type, actor_id in events:
+            out["history"].append((oid, prev, st, actor_type, actor_id, when))
             prev = st
-        if outcome == "rejected":
-            out["history"].append((oid, "placed", "rejected", "restaurant", r, end))
-        elif outcome == "cancelled":
-            actor_id = {"customer": customer, "restaurant": r}.get(cancelled_by)
-            out["history"].append((oid, prev, "cancelled", cancelled_by, actor_id, end))
-
         out["orders"].append(
             (
                 oid,
@@ -413,7 +430,7 @@ def build_batch(
                 fee,
                 tip,
                 total,
-                outcome,
+                status,
                 cancel_reason,
                 cancelled_by,
                 at,
@@ -425,8 +442,8 @@ def build_batch(
         # provider_ref is added by with_real_ids: it is built from the real order id.
         out["payments"].append((oid, total, method, "approved", at))
         # Rejected and cancelled orders paid online get their money back.
-        if outcome != "delivered" and method != "cash":
-            out["payments"].append((oid, total, method, "refunded", end))
+        if status in ("cancelled", "rejected") and method != "cash":
+            out["payments"].append((oid, total, method, "refunded", events[-1][1]))
 
     for key, rows in out.items():
         totals[key] += len(rows)

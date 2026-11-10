@@ -251,3 +251,49 @@
 - **Outcome:** kept. The pipeline reads every order of the window, not only cancelled ones, so it can give the rate. The `report_orders` validator, the export and the F8 route are jcleberfernandes's and not merged yet, so the sub-schema is not applied by `setup.py` yet and the pipeline is not in `REPORTS` yet.
 - **Verification:** on a temporary collection with the sub-schema as validator (dropped afterwards), filled with 137k documents built from the seeded PostgreSQL orders of the last 100 days: the four invalid documents tried (cancelled without actor, delivered with `cancelled_by`, unknown reason, date as string) were refused and a rejected order with a reason was accepted; the pipeline returned 1,065 restaurants and its total of cancellations (6,275) matched a `count(*)` in PostgreSQL for the same 90 days. `ruff check`, `ruff format --check` and `pytest` passed. Checked on GitHub that no other branch (`cleber`, `SRamoras`, `main`) already had pipeline 4, and that `mongodb/setup.py` on `cleber` is still the same as on `main`, so the new sub-schema does not conflict with it.
 - **Mistakes caught:** none.
+
+## Kitchen capacity (rule 4)
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** `ensure_kitchen_room` in the new `app/services/kitchen.py` (lock the restaurant row with `FOR UPDATE`, count its orders in `accepted`/`preparing`/`ready`, 409 when the count reached `kitchen_capacity`), for SRamoras to call inside F3 accept; the kitchen capacity section of the new `docs/postgres.md` (where and how the rule is enforced, why a lock, why in the app).
+- **Outcome:** kept. F3 accept is SRamoras's and does not exist yet, so the function is not called by any endpoint yet.
+- **Verification:** a script against the local database (rows created as the owner and deleted afterwards) did what F3 accept will do: lock the order, call the function, set `accepted`, in one transaction. Capacity 2 with 2 orders in preparation → the third accept got 409; after a cancel it got through. 10 simultaneous accepts with one slot left: with the function, 1 accepted and 9 refused, three times; with the same count without `FOR UPDATE`, all 10 accepted (11 active for capacity 2), three times. `ruff check`, `ruff format --check` and `pytest` passed.
+- **Mistakes caught:** none.
+
+## Orders seed: orders still in progress
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** `postgres/seed/orders.py`: today's orders now go up to 5 minutes ago. Each order keeps only the steps of its timeline that already happened, so the most recent ones stay `placed`, `accepted`, `preparing`, `ready` or `picked_up`. A future cancel or reject is not written yet. The seed respects the kitchen capacity: an order that would go over it stays `placed`. Orders still in progress keep their stock. `postgres/sql/explain_orders.sql`: frequent queries 2 and 3, without and with their index.
+- **Outcome:** kept. Found while writing the `EXPLAIN` for query 3: every seeded order was finished, so the kitchen screen query returned 0 rows and showed nothing.
+- **Verification:** reseeded on the temporary catalogue: 533 orders in progress (at about 19:40 Lisbon time), 0 restaurants over capacity, 0 history rows in the future, 0 cancel fields on orders not yet cancelled; the earlier checks (history order, last status, today's stock, refunds, opening hours, subtotals) still all 0. `ruff check`, `ruff format --check` and `pytest` passed.
+- **Mistakes caught:** none.
+
+## PostgreSQL, concurrency and runbook documentation
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:**
+  - `docs/postgres.md`: tables, both lists of "Where the rules are enforced" with the constraint or code for each, denormalisations, indexes with their query, `EXPLAIN (ANALYZE, BUFFERS)` of queries 2 and 3 without and with the index, indexed and not-indexed FKs;
+  - `docs/concurrency.md`: isolation level, rule 2 with the naive version and the 6 last-portions outputs, the order lock for status changes, rule 4 with its test;
+  - `docs/runbook.md`: the PostgreSQL section.
+  
+  Sections of other members are left as marked to-dos.
+- **Outcome:** kept. The constraint, index, FK and grant lists were taken from the live database (`pg_constraint`, `pg_indexes`, `information_schema.role_table_grants`), not written from memory. The last-portions outputs come from the temporary runner and must be taken again with the shared `run.py`.
+- **Verification:**
+  - the `EXPLAIN` outputs were run on the seeded data (418k orders);
+  - the backup and restore A commands were run as written: a dump to the host, then a restore into a scratch database, which matched the original in row counts, `alembic_version`, 103 constraints and the history grant, and was then dropped;
+  - restore B (point in time) is not drilled, and the runbook says so.
+- **Mistakes caught:**
+  - the first restore failed on `COMMENT ON EXTENSION btree_gist`, which only the superuser can set; `--no-comments` was added to the documented command;
+  - restore B first moved the data directory itself, which is the volume's mount point and cannot be moved; it now moves the directory's contents.
+
+## Commits for the seed update and the documentation
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** at RodrigoDias123's explicit request, Claude Code ran `git add` and `git commit` for the seed update (`postgres/seed/orders.py`, `postgres/sql/explain_orders.sql`), the documentation (`docs/postgres.md`, `docs/concurrency.md`, `docs/runbook.md`) and these ai-usage entries, as three separate commits. Before that it checked what is still open in RodrigoDias123's slice.
+- **Outcome:** kept. The commits use RodrigoDias123's own git identity and have no `Co-authored-by` line, so they count for this member as the course rules require. Local files that are not part of the project (`PROGRESS-B.md`, `Claude./`) were left out.
+- **Verification:** `git config user.email` checked before committing; `git status` after each commit showed only the intended files staged; `ruff check`, `ruff format --check` and `pytest` passed before committing.
+- **Mistakes caught:** none.
