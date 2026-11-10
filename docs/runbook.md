@@ -229,4 +229,55 @@ The backup and the restore were tested on the seeded data, restoring into a scra
 
 ## Redis
 
-*(to do: SRamoras.)*
+Redis holds nothing that exists only there: every key is either ephemeral (courier positions, presence, pending offers) or a copy of PostgreSQL (stock, tracking, ranking). See [redis.md](redis.md) for each key.
+
+### 1. What is backed up, how often, with which tool, where
+
+**No backup: Redis is rebuilt, not restored.**
+
+| Keys | Class | How they come back |
+|---|---|---|
+| `fd:stock:*`, `fd:order:*:track`, `fd:rank:*` | derived | `redis/rebuild.py` recreates them from PostgreSQL. F6 also refills a missing tracking key on the next request. |
+| `fd:offer:*` | ephemeral, recorded in PostgreSQL | `redis/rebuild.py` recreates the offers still `pending` and inside their 45 s, with the seconds they have left. F4 decides from PostgreSQL anyway. |
+| `fd:couriers:geo`, `fd:courier:*:online` | ephemeral | Each courier's next position (every few seconds) puts them back on the map and online. |
+
+- **Why no backup:** a restored snapshot would be older than PostgreSQL, so it could show stock, statuses or offers that are no longer true. Rebuilding from the source of truth is both faster and correct.
+- **What survives a plain restart:** the append-only file (`appendonly yes`, `appendfsync everysec`, in the `redis_data` volume) reloads the data after a Redis or machine restart, losing at most about 1 s of writes. That is crash safety, not a backup: if the volume is lost or the data is wrong, follow the commands below.
+
+### 2. Commands, in order
+
+When Redis lost its data, or its data cannot be trusted:
+
+```bash
+# 1. Start from an empty Redis. Either flush it...
+docker compose exec -T redis redis-cli FLUSHALL
+#    ...or, if the volume itself is broken, recreate it:
+#    docker compose rm -sf redis && docker volume rm food-delivery_redis_data && docker compose up -d redis
+
+# 2. Recreate every derived key, and the offers still pending, from PostgreSQL.
+uv run python redis/rebuild.py
+
+# 3. Check (next section).
+uv run python redis/verify.py
+```
+
+- **The API can stay up.** After a commit it writes the same values `rebuild.py` reads from PostgreSQL, so the two do not contradict each other. While Redis is empty, F6 answers from PostgreSQL on a miss and refills the key.
+- **Couriers need no action:** they reappear on the map with their next position. Until then F3 finds fewer couriers nearby, and the restaurant or the back office can reoffer.
+
+### 3. How to check the recovery
+
+- `uv run python redis/verify.py` compares each derived key with PostgreSQL and **exits 0** when everything matches. It prints one line per difference and exits 1 otherwise.
+- `docker compose exec -T redis redis-cli ZCARD fd:couriers:geo`: the number of couriers on the map grows back within a minute of the recovery.
+- `curl http://127.0.0.1:8000/health` answers `"redis": "ok"`.
+- **Tested:** with 50 pending offers in PostgreSQL and no keys in Redis, `verify.py` reported 50 differences; after `rebuild.py` it exited 0, and the rebuilt keys expired at the end of their 45 s. *(to do: SRamoras, run the full procedure, FLUSHALL → rebuild → verify, on the seeded data when every key family has its rebuild.)*
+
+### 4. RTO and RPO
+
+- **RTO: about 1 minute.** Restarting Redis and running `rebuild.py` takes seconds (one `SELECT` per key family). The last thing to come back is the courier map, within one position interval. A food delivery business can live with a minute in which fewer couriers are found nearby; orders are never refused because of it.
+- **RPO: 0 for anything the business needs.** Every derived key is recomputed from PostgreSQL, and every offer is a PostgreSQL row. What is lost are positions a few seconds old, which are replaced by the next ones anyway.
+
+### 5. What is lost for good
+
+- **Couriers' live positions and online status** at the moment of the loss. They are back within seconds, as couriers send their next position. The position history is not in Redis: it is in MongoDB (`courier_positions`).
+- **The 45 s window of offers already past their time:** nothing, since those offers were invalid anyway; PostgreSQL still has them, and they are marked `expired` when read or reoffered.
+- Nothing about orders, money, stock or assignments: PostgreSQL holds all of it.
