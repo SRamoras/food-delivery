@@ -184,6 +184,111 @@ REPORT_ORDERS_CANCEL_SCHEMA: dict[str, Any] = {
 }
 
 
+# Report collections (C): derived from PostgreSQL by mongodb/export_reports.py, which
+# deletes and rewrites them, so they are never backed up, only rebuilt.
+_DATE = {"bsonType": "date"}
+_MONEY = {"bsonType": "decimal"}
+_ID = {"bsonType": ["int", "long"], "minimum": 1}
+_TEXT = {"bsonType": "string"}
+
+# One document per finished order (delivered, cancelled or rejected); _id = orders.id.
+_REPORT_ORDERS_SCHEMA: dict[str, Any] = {
+    "bsonType": "object",
+    "required": [
+        "_id",
+        "restaurant_id",
+        "restaurant_name",
+        "city_id",
+        "city_name",
+        "customer_zone_id",
+        "customer_zone_name",
+        "status",
+        "lines",
+        "delivery_fee",
+        "tip",
+        "placed_at",
+    ],
+    "additionalProperties": False,
+    "properties": {
+        "_id": _ID,
+        "restaurant_id": _ID,
+        "restaurant_name": _TEXT,
+        "cuisines": {"bsonType": "array", "items": _TEXT},
+        "city_id": _ID,
+        "city_name": _TEXT,
+        "restaurant_zone_id": _ID,
+        "restaurant_zone_name": _TEXT,
+        "customer_zone_id": _ID,
+        "customer_zone_name": _TEXT,
+        "status": {"enum": ["delivered", "cancelled", "rejected"]},
+        "cancel_reason": _TEXT,
+        "cancelled_by": _TEXT,
+        # Embedded: always read with the order and never changed after it ends.
+        "lines": {
+            "bsonType": "array",
+            "minItems": 1,
+            "items": {
+                "bsonType": "object",
+                "required": ["item_id", "item_name", "quantity", "unit_price"],
+                "properties": {
+                    "item_id": _ID,
+                    "item_name": _TEXT,
+                    "quantity": {"bsonType": ["int", "long"], "minimum": 1},
+                    "unit_price": _MONEY,
+                    "options": {"bsonType": "array"},
+                },
+            },
+        },
+        "subtotal": _MONEY,
+        "delivery_fee": _MONEY,
+        "tip": _MONEY,
+        "total": _MONEY,
+        # One date per status the order reached (missing = never reached).
+        "placed_at": _DATE,
+        "accepted_at": _DATE,
+        "preparing_at": _DATE,
+        "ready_at": _DATE,
+        "picked_up_at": _DATE,
+        "delivered_at": _DATE,
+        "cancelled_at": _DATE,
+        "rejected_at": _DATE,
+    },
+}
+
+# allOf: a document must pass C's schema and B's pipeline 4 rules (cancel fields only
+# on a cancelled order), so each owner keeps their part in one place.
+REPORT_ORDERS_VALIDATOR: dict[str, Any] = {
+    "$jsonSchema": {"allOf": [_REPORT_ORDERS_SCHEMA, REPORT_ORDERS_CANCEL_SCHEMA]}
+}
+
+REPORT_ORDERS_INDEXES = [
+    # Pipeline 1 (delivered, last 30 days) and pipeline 4 (cancelled, last 90 days)
+    # both filter by status and then by a date range on placed_at.
+    IndexModel([("status", 1), ("placed_at", 1)], name="status_placed_at"),
+]
+
+# One document per delivery offer; _id = delivery_offers.id.
+REPORT_OFFERS_VALIDATOR: dict[str, Any] = {
+    "$jsonSchema": {
+        "bsonType": "object",
+        "required": ["_id", "order_id", "courier_id", "zone_id", "sent_at", "outcome"],
+        "additionalProperties": False,
+        "properties": {
+            "_id": _ID,
+            "order_id": _ID,
+            "courier_id": _ID,
+            # The restaurant's zone: offers go to couriers near the restaurant.
+            "zone_id": _ID,
+            "zone_name": _TEXT,
+            "sent_at": _DATE,
+            "outcome": {
+                "enum": ["pending", "accepted", "rejected", "expired", "withdrawn"]
+            },
+        },
+    }
+}
+
+
 def main() -> None:
     settings = SetupSettings()
     client: MongoClient = MongoClient(
@@ -200,7 +305,10 @@ def main() -> None:
         COURIER_POSITIONS_VALIDATOR,
         COURIER_POSITIONS_INDEXES,
     )
-    # C: report_orders, report_offers (B's pipeline 4 fields: REPORT_ORDERS_CANCEL_SCHEMA)
+    ensure_collection(
+        db, "report_orders", REPORT_ORDERS_VALIDATOR, REPORT_ORDERS_INDEXES
+    )
+    ensure_collection(db, "report_offers", REPORT_OFFERS_VALIDATOR)
 
     client.close()
 
