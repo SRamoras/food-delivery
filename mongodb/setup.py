@@ -80,6 +80,56 @@ def ensure_collection(
     print(f"  collection {name}: {action}, {len(indexes or [])} index(es)")
 
 
+# One document per position a courier sends (F7). Source of truth for the trail;
+# the live position is in Redis (fd:couriers:geo).
+COURIER_POSITIONS_VALIDATOR: dict[str, Any] = {
+    "$jsonSchema": {
+        "bsonType": "object",
+        "required": ["courier_id", "location", "recorded_at"],
+        # No unknown fields: a typo such as "courierId" is refused, not stored.
+        "additionalProperties": False,
+        "properties": {
+            "_id": {"bsonType": "objectId"},
+            # couriers.id in PostgreSQL. pymongo writes a Python int as int or long
+            # depending on its size, so both are accepted.
+            "courier_id": {"bsonType": ["int", "long"], "minimum": 1},
+            # GeoJSON Point, so a 2dsphere index or $geoNear can be added later.
+            "location": {
+                "bsonType": "object",
+                "required": ["type", "coordinates"],
+                "additionalProperties": False,
+                "properties": {
+                    "type": {"enum": ["Point"]},
+                    # GeoJSON order is [longitude, latitude].
+                    "coordinates": {
+                        "bsonType": "array",
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "items": [
+                            {"bsonType": "double", "minimum": -180, "maximum": 180},
+                            {"bsonType": "double", "minimum": -90, "maximum": 90},
+                        ],
+                    },
+                },
+            },
+            # BSON date (not a string): the TTL index only expires date values.
+            "recorded_at": {"bsonType": "date"},
+            # orders.id, only when the courier is on a delivery (filled from C-4).
+            "order_id": {"bsonType": ["int", "long"], "minimum": 1},
+        },
+    }
+}
+
+COURIER_POSITIONS_INDEXES = [
+    # TTL: the brief keeps the trail for 7 days (7 * 24 * 3600 = 604800 s).
+    # Mongo's TTL monitor runs about once a minute, so expiry is not to the second.
+    IndexModel("recorded_at", name="recorded_at_ttl", expireAfterSeconds=604800),
+    # "Trail of courier X, newest first": equality on courier_id, then sorted by
+    # recorded_at, so the index serves both the filter and the sort.
+    IndexModel([("courier_id", 1), ("recorded_at", -1)], name="courier_id_recorded_at"),
+]
+
+
 def main() -> None:
     settings = SetupSettings()
     client: MongoClient = MongoClient(
@@ -90,7 +140,12 @@ def main() -> None:
     ensure_app_user(db, settings.mongo_app_password)
 
     # --- collections: each owner adds theirs here with ensure_collection ---
-    # A: courier_positions (C-3)
+    ensure_collection(
+        db,
+        "courier_positions",
+        COURIER_POSITIONS_VALIDATOR,
+        COURIER_POSITIONS_INDEXES,
+    )
     # C: report_orders, report_offers (B adds the pipeline 4 fields)
 
     client.close()
