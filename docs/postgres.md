@@ -82,7 +82,16 @@ A restaurant never has more orders in `accepted`, `preparing` or `ready` than it
 
 #### Maximum active deliveries per vehicle (rule 3)
 
-Bicycle 1, scooter 2, car 3. *(to do: SRamoras, with F4.)* The group's design: F4 locks the courier row (`FOR UPDATE`) and then counts the courier's deliveries that are not delivered yet. The partial index `ix_deliveries_courier_active` serves that count. The lock is needed for the same write-skew reason as rule 4.
+Bicycle 1, scooter 2, car 3 (`VEHICLE_CAPACITY` in `app/models/couriers.py`).
+
+- **Where:** `accept_offer` in `app/services/courier_offers.py` (F4), in the same transaction that inserts the delivery. No room → 409 `no room left on the <vehicle>`. F3 also offers only to couriers with room, but that is a first pass without a lock; F4 is where the rule is enforced.
+- **How:**
+  1. After the order and the offer are locked, lock the courier row: `SELECT ... FROM couriers WHERE id = :c FOR UPDATE`.
+  2. Count the courier's active deliveries: `delivered_at IS NULL` and the order not cancelled. The partial index `ix_deliveries_courier_active` holds only deliveries not delivered yet, so the count reads a few rows.
+  3. Refuse if the count has reached the vehicle's limit.
+- **Why a lock is needed:** a write skew, as in rule 4. Two accepts by the same courier for different orders both count "one slot left" and each inserts a different delivery row, so PostgreSQL sees no conflict. The lock on the courier row makes them run one after the other.
+- **Why in the app and not in PostgreSQL:** the rule counts rows in `deliveries` (joined to `orders` to skip cancelled orders) against the vehicle type in `couriers`. A `CHECK` sees one row only; a trigger would need the same lock and count in PL/pgSQL. Next to the order lock F4 already takes, the Python version is shorter to read, test and explain.
+- **Tested:** see [concurrency.md](concurrency.md): a scooter with 1 active delivery accepting 5 offers at once gets 1 × 200 and 4 × 409 (2 active deliveries), three times; without the lock all 5 go through (6 active deliveries).
 
 #### Minimum order value, opening hours, delivered zones
 
@@ -123,8 +132,8 @@ Indexes created by a primary key or a `UNIQUE` constraint are listed with the ru
 | `ix_restaurants_zone_id_open` `(zone_id) WHERE status = 'open'` | Meant for frequent query 1 (F1): open restaurants of a zone. On the seeded data the planner does not use it (see the query 1 EXPLAIN): 1,203 restaurants fit in 24 pages and 93% are open, so a sequential scan is cheaper. |
 | `ix_zone_fees_customer_zone_id` | F1: the restaurant zones that deliver to a customer's zone. The unique index starts with `restaurant_zone_id`, so it cannot serve this. |
 | `ix_menu_categories_restaurant_id`, `ix_menu_items_category_id` | A restaurant's menu (F1, F2). Cover the FKs. |
-| `ix_deliveries_courier_active` `(courier_id) WHERE delivered_at IS NULL` | Frequent query 4 and the rule 3 count: a courier's active deliveries. *(to do: SRamoras, EXPLAIN query 4.)* |
 | `ix_ratings_restaurant_id_created_at` | Frequent query 6: a restaurant's average rating in the last 90 days. Also the index query 1 depends on: F1 shows each restaurant's average rating. |
+| `ix_deliveries_courier_active` `(courier_id) WHERE delivered_at IS NULL` | Frequent query 4 and the rule 3 count: a courier's active deliveries. Partial: it holds only deliveries not delivered yet, a few hundred out of hundreds of thousands. It also covers the `courier_id` FK for those rows. |
 | `ex_opening_periods_no_overlap` (GiST) | Backs the `EXCLUDE` constraint. It also finds a restaurant's periods for a weekday (F1, F2). |
 
 ### EXPLAIN evidence
@@ -299,7 +308,14 @@ Restaurant 137 has the most active orders right now: 8.
 
 #### Query 4: a courier's active deliveries
 
-*(to do: SRamoras.)*
+```sql
+SELECT order_id, accepted_at, picked_up_at
+  FROM deliveries WHERE courier_id = :c AND delivered_at IS NULL;
+```
+
+The same filter the rule 3 count uses in F4.
+
+*(to do: SRamoras, the plans without and with `ix_deliveries_courier_active` on the seeded deliveries, taken like queries 2 and 3: drop the index inside a transaction, `EXPLAIN (ANALYZE, BUFFERS)`, roll back, run it again.)*
 
 ## Foreign keys: indexed and not indexed
 
@@ -328,8 +344,32 @@ PostgreSQL does not index a foreign key by itself. An index on the child column 
 | `restaurant_cuisines.cuisine_id` | Cuisines are a short fixed list that is never deleted. Filtering by cuisine is not a PostgreSQL query here. |
 | `order_lines.item_id` | No query reads lines by item; item sales are a MongoDB report. Items with orders are never deleted (`RESTRICT`); they are marked `unavailable` instead. An index on 1.1M lines would only slow down every order insert. |
 | `orders.source_address_id` | Only kept as a link; orders are read through their own snapshot. Deleting an address (`SET NULL`) scans `orders`, which is acceptable for a rare action. If it became frequent, this is the index to add. |
-| `delivery_offers.courier_id` | *(to do: SRamoras, confirm: F4 reads an offer by its id, not by courier.)* |
+| `delivery_offers.courier_id` | No query lists a courier's offers. F4 reads an offer by its primary key (`WHERE id = :offer AND courier_id = :c`), and F3 checks "was this courier offered this order?" through the unique `(order_id, courier_id)`. Couriers with offers are never deleted (`RESTRICT`), so the FK check that would scan the table does not run. An index would only add a write to every offer. |
 
 ## Roles
 
-*(to do: SRamoras.)*
+Least privilege: each program connects with the smallest role that can do its job, so a bug or an injection in the API cannot change the schema or rewrite history.
+
+| Role | Used by | Can | Cannot |
+|---|---|---|---|
+| `postgres` (superuser) | `scripts/setup.sh`, step 1 only | Create the database, the roles and the `btree_gist` extension | (never used by the app, the migrations or the scripts after setup) |
+| `fd_owner` | Alembic (`MIGRATION_DATABASE_URL`), scenario resets in `tests/concurrency/` | Own the database and the `public` schema; create, alter and drop tables | Create databases or roles |
+| `fd_app` | The API (`DATABASE_URL`), the seeds | `SELECT`, `INSERT`, `UPDATE`, `DELETE` on tables; use sequences | `CREATE`, `ALTER`, `DROP`, `TRUNCATE`; `UPDATE` or `DELETE` on `order_status_history` |
+| `fd_readonly` | Report export, the Mongo position seed, DbGate (`READONLY_DATABASE_URL`) | `SELECT` | Any write: its transactions are read-only by default |
+
+**How it is set up:**
+- **`scripts/setup.sh` (as the superuser):** creates the three roles with `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE` and the passwords from `.env` (re-run applies a changed password); creates `food_delivery` owned by `fd_owner`, so `fd_owner` also owns the `public` schema; `REVOKE ALL ON DATABASE food_delivery FROM PUBLIC` and `GRANT CONNECT` to `fd_app` and `fd_readonly` only; `ALTER ROLE fd_readonly SET default_transaction_read_only = on`, a second guard if a write grant were ever added by mistake. Roles need the superuser, and migrations run as `fd_owner`, which is why this is not a migration.
+- **First migration (`efa3e96d0fe0`, as `fd_owner`):** `GRANT USAGE ON SCHEMA public` to `fd_app` and `fd_readonly` (no `CREATE`), and `ALTER DEFAULT PRIVILEGES FOR ROLE fd_owner`: every table created later gets `SELECT, INSERT, UPDATE, DELETE` for `fd_app` and `SELECT` for `fd_readonly`, and every sequence `USAGE, SELECT` for `fd_app`. So no later migration needs its own `GRANT`.
+- **Orders migration:** `REVOKE UPDATE, DELETE ON order_status_history FROM fd_app` makes the history append-only for the app.
+
+**Tested** as each role on the running database:
+
+| Role | Statement | Result |
+|---|---|---|
+| `fd_app` | `CREATE TABLE x (id int)` | `permission denied for schema public` |
+| `fd_app` | `DROP TABLE couriers` | `must be owner of table couriers` |
+| `fd_app` | `TRUNCATE couriers` | `permission denied for table couriers` |
+| `fd_app` | `UPDATE` / `DELETE` on `order_status_history` | `permission denied for table order_status_history` |
+| `fd_app` | `SELECT` on `couriers`, `INSERT` into `cities` | allowed |
+| `fd_readonly` | `SELECT` on `orders` | allowed |
+| `fd_readonly` | `INSERT`, `UPDATE`, `CREATE TABLE` | `cannot execute ... in a read-only transaction` |
