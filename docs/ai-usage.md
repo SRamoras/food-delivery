@@ -297,3 +297,11 @@
 - **Outcome:** kept. The commits use RodrigoDias123's own git identity and have no `Co-authored-by` line, so they count for this member as the course rules require. Local files that are not part of the project (`PROGRESS-B.md`, `Claude./`) were left out.
 - **Verification:** `git config user.email` checked before committing; `git status` after each commit showed only the intended files staged; `ruff check`, `ruff format --check` and `pytest` passed before committing.
 - **Mistakes caught:** none.
+## F3: restaurant accepts, rejects and reoffers
+
+- **Who:** SRamoras
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** accept (with offers to nearby couriers), reject and reoffer, and the kitchen capacity check that F3 accept calls; `app/services/offers.py`, `app/routers/offers.py`, `app/schemas/offers.py`, `check_kitchen_capacity` in `app/services/orders.py` (RodrigoDias123's file, written with his agreement), `app/main.py`
+- **Outcome:** kept. Offers still inside their 45 s stay `pending` on reoffer; only older ones become `expired`. Choosing couriers with room is only a first pass; F4 re-checks with the courier row locked.
+- **Verification:** an end-to-end script against the running API, 3 runs: 4 simultaneous accepts with kitchen capacity 2 gave 2 × 200 and 2 × 409 every time; offers went to the 5 nearest online, active couriers within 3 km (far, offline and blocked left out); `fd:offer:{id}` had TTL 45; reoffer offered new couriers only, expired offers older than 45 s, skipped a full bicycle and refused an order with a courier; reject gave the stock back, refunded MB WAY and wrote the history. No 5xx. ruff and pytest passed.
+- **Mistakes caught:** the first version subtracted a `timedelta` from `text("now()")`, which raised a 500 on reoffer; changed to `func.now()`. The AI first made a new list of kitchen statuses instead of reusing `ACTIVE_KITCHEN_STATUSES`.
