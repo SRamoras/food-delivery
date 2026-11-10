@@ -251,3 +251,12 @@
 - **Outcome:** kept. The pipeline reads every order of the window, not only cancelled ones, so it can give the rate. The `report_orders` validator, the export and the F8 route are jcleberfernandes's and not merged yet, so the sub-schema is not applied by `setup.py` yet and the pipeline is not in `REPORTS` yet.
 - **Verification:** on a temporary collection with the sub-schema as validator (dropped afterwards), filled with 137k documents built from the seeded PostgreSQL orders of the last 100 days: the four invalid documents tried (cancelled without actor, delivered with `cancelled_by`, unknown reason, date as string) were refused and a rejected order with a reason was accepted; the pipeline returned 1,065 restaurants and its total of cancellations (6,275) matched a `count(*)` in PostgreSQL for the same 90 days. `ruff check`, `ruff format --check` and `pytest` passed. Checked on GitHub that no other branch (`cleber`, `SRamoras`, `main`) already had pipeline 4, and that `mongodb/setup.py` on `cleber` is still the same as on `main`, so the new sub-schema does not conflict with it.
 - **Mistakes caught:** none.
+
+## Kitchen capacity (rule 4)
+
+- **Who:** RodrigoDias123
+- **Tool:** Claude Code (Claude Opus 5.5)
+- **For what:** `ensure_kitchen_room` in the new `app/services/kitchen.py` (lock the restaurant row with `FOR UPDATE`, count its orders in `accepted`/`preparing`/`ready`, 409 when the count reached `kitchen_capacity`), for SRamoras to call inside F3 accept; the kitchen capacity section of the new `docs/postgres.md` (where and how the rule is enforced, why a lock, why in the app).
+- **Outcome:** kept. F3 accept is SRamoras's and does not exist yet, so the function is not called by any endpoint yet.
+- **Verification:** a script against the local database (rows created as the owner and deleted afterwards) did what F3 accept will do: lock the order, call the function, set `accepted`, in one transaction. Capacity 2 with 2 orders in preparation → the third accept got 409; after a cancel it got through. 10 simultaneous accepts with one slot left: with the function, 1 accepted and 9 refused, three times; with the same count without `FOR UPDATE`, all 10 accepted (11 active for capacity 2), three times. `ruff check`, `ruff format --check` and `pytest` passed.
+- **Mistakes caught:** none.
