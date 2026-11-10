@@ -14,15 +14,52 @@ from sqlalchemy import text
 from app.config import LISBON
 from app.db.postgres import SessionLocal
 from app.db.redis import client
+from app.models.offers import OFFER_TTL_SECONDS
 from app.models.orders import Order
+from app.services.offers import offer_key
 from app.services.ranking import recent_deliveries, window_keys
 from app.services.stock import stock_key
 from app.services.tracking import track_fields, track_rows
 
 
 def verify_offers() -> list[str]:
-    """A: every pending, non-expired offer in PG has its fd:offer key, and no extra keys."""
-    return []
+    """A: every pending, non-expired offer in PG has its fd:offer key, and no extra keys.
+
+    Offers within 2 s of their 45 s are left out on both sides: PG and Redis measure
+    the 45 s from slightly different moments (sent_at vs the write after the commit),
+    so at the very edge one may have expired and the other not yet.
+    """
+    with SessionLocal() as session:
+        rows = session.execute(
+            text("""
+                SELECT f.id, f.order_id, f.courier_id,
+                       f.sent_at > now() - make_interval(secs => :ttl - 2) AS clear
+                  FROM delivery_offers f
+                 WHERE f.outcome = 'pending'
+                   AND f.sent_at > now() - make_interval(secs => :ttl + 2)
+            """),
+            {"ttl": OFFER_TTL_SECONDS},
+        ).all()
+    expected = {
+        offer_key(i): {"order_id": str(o), "courier_id": str(c)}
+        for i, o, c, clear in rows
+        if clear
+    }
+    edge = {offer_key(i) for i, _, _, clear in rows if not clear}
+    problems = []
+    for key, fields in expected.items():
+        actual = client.hgetall(key)
+        if not actual:
+            problems.append(f"{key}: pending in pg, missing in redis")
+        elif {k: actual.get(k) for k in fields} != fields:
+            problems.append(f"{key}: redis={actual} pg={fields}")
+    # SCAN, never KEYS: walks the keyspace in small batches without blocking Redis.
+    problems += [
+        f"{key}: in redis but not pending in pg"
+        for key in client.scan_iter(match="fd:offer:*", count=1000)
+        if key not in expected and key not in edge
+    ]
+    return problems
 
 
 def verify_stock() -> list[str]:
