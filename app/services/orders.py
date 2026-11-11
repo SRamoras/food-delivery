@@ -223,6 +223,8 @@ class StatusChange:
     courier_id: int | None = None
     # Set on `delivered`: the restaurant's city, for the last-hour ranking bucket.
     city_id: int | None = None
+    # Set on cancel: offers it withdrew, whose fd:offer keys must go after the commit.
+    withdrawn_offer_ids: list[int] = field(default_factory=list)
 
 
 def release_and_refund(session: Session, order: Order) -> tuple[dict[int, int], date]:
@@ -275,7 +277,8 @@ def cancel_order(
     Lock order: the order first (lock_order), then its stock rows (release_stock), the
     same order every flow uses. Two simultaneous cancels: the second waits for the
     lock, then sees `cancelled` and gets 409, so stock and refund happen once.
-    Pending offers are withdrawn, so no courier can accept a cancelled order.
+    Pending offers are withdrawn, so no courier can accept a cancelled order; their
+    ids are returned so their fd:offer keys are deleted after the commit.
     Ending a delivery a courier already accepted waits for the marker agreed with
     A in `deliveries` (step 6.4).
     """
@@ -283,12 +286,13 @@ def cancel_order(
     _check_owner(order, actor_type, actor_id)
     change_status(session, order, "cancelled", actor_type, actor_id, reason=reason)
     stock_after, day = release_and_refund(session, order)
-    session.execute(
+    withdrawn = session.scalars(
         update(DeliveryOffer)
         .where(DeliveryOffer.order_id == order.id, DeliveryOffer.outcome == "pending")
         .values(outcome="withdrawn")
-    )
-    return StatusChange(order, stock_after, day)
+        .returning(DeliveryOffer.id)
+    ).all()
+    return StatusChange(order, stock_after, day, withdrawn_offer_ids=list(withdrawn))
 
 
 def distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> Decimal:

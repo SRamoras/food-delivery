@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 
 from app.config import LISBON
+from app.services.courier_offers import delete_offer_keys
 from app.services.orders import PlacedOrder, StatusChange
 from app.services.ranking import record_delivery
 from app.services.stock import write_stock_copies
@@ -34,6 +35,8 @@ def after_status_change(change: StatusChange) -> None:
     """
     order = change.order
     _track(order.id, order.customer_id, order.status, change.courier_id)
+    # A cancel withdrew these offers in PG; their keys would otherwise live up to 45 s.
+    delete_offer_keys(change.withdrawn_offer_ids)
     if order.status == "delivered" and change.city_id is not None:
         # Derived like the others: a failure is logged and rebuild.py fixes it.
         try:
