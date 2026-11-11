@@ -7,7 +7,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Numeric,
-    String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -19,7 +19,7 @@ class City(Base):
     __tablename__ = "cities"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(100), unique=True)
+    name: Mapped[str] = mapped_column(Text, unique=True)
 
 
 class Zone(Base):
@@ -30,7 +30,7 @@ class Zone(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     # RESTRICT: a city with zones cannot disappear and take addresses with it.
     city_id: Mapped[int] = mapped_column(ForeignKey("cities.id", ondelete="RESTRICT"))
-    name: Mapped[str] = mapped_column(String(100))
+    name: Mapped[str] = mapped_column(Text)
 
 
 class ZoneFee(Base):

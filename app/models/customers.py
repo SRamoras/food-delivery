@@ -5,11 +5,11 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     Numeric,
-    String,
     Text,
     func,
     text,
@@ -23,10 +23,10 @@ class Customer(Base):
     __tablename__ = "customers"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(200))
-    email: Mapped[str] = mapped_column(String(255), unique=True)
-    phone: Mapped[str] = mapped_column(String(20), unique=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
+    name: Mapped[str] = mapped_column(Text)
+    email: Mapped[str] = mapped_column(Text, unique=True)
+    phone: Mapped[str] = mapped_column(Text, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text)
     registered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -44,6 +44,8 @@ class CustomerAddress(Base):
             unique=True,
             postgresql_where=text("is_default"),
         ),
+        # Portuguese postcode, 0000-000: the only length rule on these text columns.
+        CheckConstraint(r"postcode ~ '^[0-9]{4}-[0-9]{3}$'", name="postcode_format"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -53,10 +55,10 @@ class CustomerAddress(Base):
         ForeignKey("customers.id", ondelete="CASCADE"), index=True
     )
     zone_id: Mapped[int] = mapped_column(ForeignKey("zones.id", ondelete="RESTRICT"))
-    street: Mapped[str] = mapped_column(String(200))
-    number: Mapped[str] = mapped_column(String(20))
-    floor: Mapped[str | None] = mapped_column(String(20))
-    postcode: Mapped[str] = mapped_column(String(8))
+    street: Mapped[str] = mapped_column(Text)
+    number: Mapped[str] = mapped_column(Text)
+    floor: Mapped[str | None] = mapped_column(Text)
+    postcode: Mapped[str] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
     # numeric(9,6) keeps exact coordinates, about 0.1 m of precision.
     lat: Mapped[Decimal] = mapped_column(Numeric(9, 6))

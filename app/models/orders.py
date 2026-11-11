@@ -12,7 +12,6 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
-    String,
     Text,
     func,
     text,
@@ -79,6 +78,11 @@ class Order(Base):
         CheckConstraint("total >= 0", name="total_nonneg"),
         # The total can never drift from its parts (catches rounding bugs).
         CheckConstraint("total = subtotal + delivery_fee + tip", name="total_sum"),
+        # Same format as customer_addresses.postcode, which this column snapshots.
+        CheckConstraint(
+            r"delivery_postcode ~ '^[0-9]{4}-[0-9]{3}$'",
+            name="delivery_postcode_format",
+        ),
         CheckConstraint(f"status IN ({_in(ORDER_STATUSES)})", name="status_valid"),
         # A cancelled order always says who and why; no other status has a cancel actor.
         CheckConstraint(
@@ -126,9 +130,9 @@ class Order(Base):
         ForeignKey("customer_addresses.id", ondelete="SET NULL")
     )
     delivery_street: Mapped[str] = mapped_column(Text)
-    delivery_number: Mapped[str] = mapped_column(String(20))
-    delivery_floor: Mapped[str | None] = mapped_column(String(20))
-    delivery_postcode: Mapped[str] = mapped_column(String(8))
+    delivery_number: Mapped[str] = mapped_column(Text)
+    delivery_floor: Mapped[str | None] = mapped_column(Text)
+    delivery_postcode: Mapped[str] = mapped_column(Text)
     delivery_zone_id: Mapped[int] = mapped_column(
         ForeignKey("zones.id", ondelete="RESTRICT")
     )
@@ -141,10 +145,10 @@ class Order(Base):
     tip: Mapped[Decimal] = mapped_column(MONEY, server_default=text("0"))
     total: Mapped[Decimal] = mapped_column(MONEY)
 
-    status: Mapped[str] = mapped_column(String(20), server_default=text("'placed'"))
-    cancel_reason: Mapped[str | None] = mapped_column(String(30))
+    status: Mapped[str] = mapped_column(Text, server_default=text("'placed'"))
+    cancel_reason: Mapped[str | None] = mapped_column(Text)
     # Also in the history; kept here so the report export needs no join.
-    cancelled_by: Mapped[str | None] = mapped_column(String(20))
+    cancelled_by: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -201,9 +205,9 @@ class OrderStatusHistory(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     # RESTRICT: the history can never be removed by a cascade.
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="RESTRICT"))
-    old_status: Mapped[str | None] = mapped_column(String(20))  # NULL at order creation
-    new_status: Mapped[str] = mapped_column(String(20))
-    actor_type: Mapped[str] = mapped_column(String(20))
+    old_status: Mapped[str | None] = mapped_column(Text)  # NULL at order creation
+    new_status: Mapped[str] = mapped_column(Text)
+    actor_type: Mapped[str] = mapped_column(Text)
     actor_id: Mapped[int | None] = mapped_column(Integer)  # NULL for backoffice/system
     changed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

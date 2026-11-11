@@ -1,6 +1,6 @@
 """Couriers, their vehicle and whether they may work."""
 
-from sqlalchemy import CheckConstraint, String, text
+from sqlalchemy import CheckConstraint, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.postgres import Base
@@ -30,12 +30,12 @@ class Courier(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(200))
-    email: Mapped[str] = mapped_column(String(255), unique=True)
-    phone: Mapped[str] = mapped_column(String(20), unique=True)
-    vehicle_type: Mapped[str] = mapped_column(String(10))
+    name: Mapped[str] = mapped_column(Text)
+    email: Mapped[str] = mapped_column(Text, unique=True)
+    phone: Mapped[str] = mapped_column(Text, unique=True)
+    vehicle_type: Mapped[str] = mapped_column(Text)
     # UNIQUE: two vehicles never share a plate. Bicycles have NULL, and NULLs never
     # collide in a UNIQUE, so any number of bicycles is allowed.
-    licence_plate: Mapped[str | None] = mapped_column(String(10), unique=True)
+    licence_plate: Mapped[str | None] = mapped_column(Text, unique=True)
     # blocked couriers cannot go online or accept offers (checked in F7 and F4).
-    status: Mapped[str] = mapped_column(String(10), server_default=text("'active'"))
+    status: Mapped[str] = mapped_column(Text, server_default=text("'active'"))

@@ -3,7 +3,7 @@
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, Numeric, String, Text, text
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, Numeric, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,7 +17,7 @@ class MenuCategory(Base):
     restaurant_id: Mapped[int] = mapped_column(
         ForeignKey("restaurants.id", ondelete="CASCADE"), index=True
     )
-    name: Mapped[str] = mapped_column(String(100))
+    name: Mapped[str] = mapped_column(Text)
 
 
 class MenuItem(Base):
@@ -34,10 +34,10 @@ class MenuItem(Base):
     category_id: Mapped[int] = mapped_column(
         ForeignKey("menu_categories.id", ondelete="RESTRICT"), index=True
     )
-    name: Mapped[str] = mapped_column(String(200))
+    name: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
-    status: Mapped[str] = mapped_column(String(15), server_default=text("'available'"))
+    status: Mapped[str] = mapped_column(Text, server_default=text("'available'"))
     # Configured portions per day; NULL means no limit. The daily_stock table holds
     # what is left today (Person B).
     daily_stock: Mapped[int | None] = mapped_column(Integer)

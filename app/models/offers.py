@@ -9,7 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Numeric,
-    String,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -60,7 +60,7 @@ class DeliveryOffer(Base):
     sent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    outcome: Mapped[str] = mapped_column(String(10), server_default=text("'pending'"))
+    outcome: Mapped[str] = mapped_column(Text, server_default=text("'pending'"))
 
 
 class Delivery(Base):
