@@ -269,7 +269,7 @@ uv run python redis/verify.py
 - `uv run python redis/verify.py` compares each derived key with PostgreSQL and **exits 0** when everything matches. It prints one line per difference and exits 1 otherwise.
 - `docker compose exec -T redis redis-cli ZCARD fd:couriers:geo`: the number of couriers on the map grows back within a minute of the recovery.
 - `curl http://127.0.0.1:8000/health` answers `"redis": "ok"`.
-- **Tested:** with 50 pending offers in PostgreSQL and no keys in Redis, `verify.py` reported 50 differences; after `rebuild.py` it exited 0, and the rebuilt keys expired at the end of their 45 s. *(to do: SRamoras, run the full procedure, FLUSHALL → rebuild → verify, on the seeded data when every key family has its rebuild.)*
+- **Tested** on the seeded data, with every key family's rebuild in place: after `FLUSHALL` (9 keys before, 0 after), `verify.py` exited 1 and listed 11 differences (4 pending offers, 3 stock keys, 4 cities' ranking). `rebuild.py` took 1.4 s and wrote 4 offer keys, 3 stock keys, 7 tracking hashes and 4 ranking buckets. `verify.py` then reported 0 differences and exited 0, and `/health` answered `"redis": "ok"`. An earlier test with 50 pending offers showed the rebuilt offer keys expiring at the end of their 45 s.
 
 ### 4. RTO and RPO
 
