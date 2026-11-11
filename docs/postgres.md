@@ -2,8 +2,6 @@
 
 PostgreSQL is the source of truth: everything that must never be lost or contradict itself (orders, money, stock, assignments) lives here. MongoDB and Redis only hold copies or data that can be lost. The ER diagram is in [database-structure.md](database-structure.md).
 
-Sections still to be written by their owners are marked *(to do: name)*.
-
 ## Tables
 
 | Table | What it represents and why it exists |
@@ -26,6 +24,25 @@ Sections still to be written by their owners are marked *(to do: name)*.
 | `delivery_offers` | One offer of one order to one courier and its outcome. The record of what Redis holds for 45 s. |
 | `deliveries` | The courier who won an order, with the accept, pickup and delivery times. Rule 1. |
 | `ratings` | The customer's rating of a delivered order (restaurant and courier). |
+
+## Types
+
+| Data | Type | Why |
+|---|---|---|
+| Money (prices, fees, tips, totals, payments) | `numeric(10,2)` | Exact decimals; `float` would round cents. `Decimal` in Python. |
+| Moments (orders, history, payments, offers, deliveries, ratings) | `timestamptz` | An instant, shown in Lisbon time by the app. |
+| Calendar days | `date` | `daily_stock.stock_date`: one Lisbon day. |
+| Opening periods | `int4range` of minutes `[0, 1440)` | `&&` gives the overlap test for the `EXCLUDE`, and 24:00 is the upper bound 1440. |
+| Item options, line options | `jsonb` | See [mongodb.md](mongodb.md): their shape changes per restaurant. |
+| Coordinates, distance | `numeric` | Fixed precision, compared and stored as given. |
+| Every string | `text` | No length limit is a business rule here. |
+
+**Why `text` everywhere** (migration `2d36777303ad`): the first migrations used `varchar(n)` with lengths that were not business rules (names of 100, 200 or 255) or that repeated a rule a `CHECK` already enforces. Those columns are now `text`, and each real rule is a `CHECK`:
+- **Enumerated values** (statuses, actor types, vehicle types, payment methods, offer outcomes, cancel reasons): `CHECK ... IN (...)`. A length adds nothing.
+- **NIF:** `ck_restaurants_nif_format`, exactly 9 digits.
+- **Postcode:** the only length rule in the brief's data. `ck_customer_addresses_postcode_format` and `ck_orders_delivery_postcode_format` require the Portuguese format `0000-000`, which is stronger than "at most 8 characters".
+
+In PostgreSQL `varchar` to `text` needs no table rewrite and keeps the indexes, so the migration runs in about 3 s on the seeded data.
 
 ## Where the rules are enforced
 
@@ -53,6 +70,7 @@ Sections still to be written by their owners are marked *(to do: name)*.
 - **Delivery times:** `ck_deliveries_picked_up_after_accepted` and `ck_deliveries_delivered_after_picked_up` keep the times in order.
 - **Option snapshot:** `ck_order_lines_options_is_array` requires `order_lines.options` to be a JSON array.
 - **Restaurant and menu ranges:** `kitchen_capacity > 0`, `min_order_value >= 0` and `menu_items.daily_stock >= 0`.
+- **Postcode format:** `0000-000` on addresses and on the order's address snapshot (see Types).
 
 ### Rules enforced in the app
 
