@@ -9,8 +9,6 @@ The four rules that must hold under simultaneous requests, and how each one is p
 | 3. A courier never has more active deliveries than the vehicle allows | F4 | Lock the courier row (`FOR UPDATE`), then count | — (write skew) |
 | 4. A restaurant never has more orders in preparation than its kitchen capacity | F3 | Lock the restaurant row (`FOR UPDATE`), then count | — (write skew) |
 
-Sections still to be written by their owners are marked *(to do: name)*.
-
 ## Isolation level
 
 **`READ COMMITTED`**, PostgreSQL's default, with explicit row locks and conditional updates.
@@ -66,18 +64,69 @@ UPDATE daily_stock SET remaining = :new WHERE item_id = :item AND stock_date = :
 - **Attack:** 60 `POST /customers/{id}/orders` of 1 portion each, `simulate=approved`, fired together with `httpx.AsyncClient` and `asyncio.gather`.
 - **Check:** the rule holds if the stock is 0 and exactly 30 orders exist.
 
-These outputs were taken with a temporary runner that calls the scenario's `fixture`, `attack` and `check`. *(to do: RodrigoDias123, take them again with the shared `tests/concurrency/run.py` when it exists, so all 12 outputs have the same format.)*
+Taken with the shared runner on the seeded data, 3 runs per mode:
 
+**Real mode** (`uv run python tests/concurrency/run.py --scenario last-portions --mode real`):
 ```
-mode=naive succeeded=60 refused=0 failed=0 rule_holds=False orders=60 stock_left=25
-mode=naive succeeded=60 refused=0 failed=0 rule_holds=False orders=60 stock_left=27
-mode=naive succeeded=60 refused=0 failed=0 rule_holds=False orders=60 stock_left=28
-mode=real succeeded=30 refused=30 failed=0 rule_holds=True orders=30 stock_left=0
-mode=real succeeded=30 refused=30 failed=0 rule_holds=True orders=30 stock_left=0
-mode=real succeeded=30 refused=30 failed=0 rule_holds=True orders=30 stock_left=0
+scenario:   last-portions
+mode:       real
+requests:   60
+succeeded:  30 (2xx)
+refused:    30 (4xx)
+failed:     0 (5xx)
+rule holds: yes (orders=30 stock_left=0)
+exit code: 0
+
+scenario:   last-portions
+mode:       real
+requests:   60
+succeeded:  30 (2xx)
+refused:    30 (4xx)
+failed:     0 (5xx)
+rule holds: yes (orders=30 stock_left=0)
+exit code: 0
+
+scenario:   last-portions
+mode:       real
+requests:   60
+succeeded:  30 (2xx)
+refused:    30 (4xx)
+failed:     0 (5xx)
+rule holds: yes (orders=30 stock_left=0)
+exit code: 0
 ```
 
-- **Naive:** all 60 orders went through, but only 2–5 portions were taken, so 60 orders exist for 30 portions.
+**Naive mode** (`--mode naive`):
+```
+scenario:   last-portions
+mode:       naive
+requests:   60
+succeeded:  60 (2xx)
+refused:    0 (4xx)
+failed:     0 (5xx)
+rule holds: NO (orders=60 stock_left=24)
+exit code: 1
+
+scenario:   last-portions
+mode:       naive
+requests:   60
+succeeded:  60 (2xx)
+refused:    0 (4xx)
+failed:     0 (5xx)
+rule holds: NO (orders=60 stock_left=24)
+exit code: 1
+
+scenario:   last-portions
+mode:       naive
+requests:   60
+succeeded:  60 (2xx)
+refused:    0 (4xx)
+failed:     0 (5xx)
+rule holds: NO (orders=60 stock_left=27)
+exit code: 1
+```
+
+- **Naive:** all 60 orders went through, but only 3–6 portions were taken, so 60 orders exist for 30 portions.
 - **Real:** exactly 30 orders; the other 30 got 409 "sold out"; stock 0; no 5xx.
 
 ## Status changes (F3, F5)
