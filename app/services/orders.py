@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import LISBON
 from app.errors import Conflict, NotFound
+from app.models.geo import Zone
 from app.models.offers import Delivery, DeliveryOffer
 from app.models.orders import Order, OrderLine
 from app.models.payments import Payment
@@ -220,6 +221,8 @@ class StatusChange:
     stock_date: date | None = None
     # Set by the courier steps, so the tracking hash gets the courier.
     courier_id: int | None = None
+    # Set on `delivered`: the restaurant's city, for the last-hour ranking bucket.
+    city_id: int | None = None
 
 
 def release_and_refund(session: Session, order: Order) -> tuple[dict[int, int], date]:
@@ -333,4 +336,8 @@ def courier_step(
             float(order.delivery_lat),
             float(order.delivery_lng),
         )
+        # Read here, inside the transaction, so the ranking write after the commit
+        # does not need PostgreSQL.
+        city_id = session.get(Zone, rest.zone_id).city_id
+        return StatusChange(order, courier_id=courier_id, city_id=city_id)
     return StatusChange(order, courier_id=courier_id)
