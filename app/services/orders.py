@@ -12,8 +12,9 @@ from sqlalchemy.orm import Session
 
 from app.config import LISBON
 from app.errors import Conflict, NotFound
+from app.models.geo import Zone
 from app.models.offers import Delivery, DeliveryOffer
-from app.models.orders import ACTIVE_KITCHEN_STATUSES, Order, OrderLine
+from app.models.orders import Order, OrderLine
 from app.models.payments import Payment
 from app.models.restaurants import Restaurant
 from app.schemas.orders import PlaceOrderIn
@@ -220,6 +221,10 @@ class StatusChange:
     stock_date: date | None = None
     # Set by the courier steps, so the tracking hash gets the courier.
     courier_id: int | None = None
+    # Set on `delivered`: the restaurant's city, for the last-hour ranking bucket.
+    city_id: int | None = None
+    # Set on cancel: offers it withdrew, whose fd:offer keys must go after the commit.
+    withdrawn_offer_ids: list[int] = field(default_factory=list)
 
 
 def release_and_refund(session: Session, order: Order) -> tuple[dict[int, int], date]:
@@ -230,33 +235,6 @@ def release_and_refund(session: Session, order: Order) -> tuple[dict[int, int], 
     stock_after, day = stock.release_stock(session, order)
     refund_if_paid_online(session, order.id)
     return stock_after, day
-
-
-def check_kitchen_capacity(session: Session, restaurant_id: int) -> None:
-    """Rule 4: 409 if the restaurant already has kitchen_capacity orders in the kitchen.
-
-    Write skew without the lock: two accepts both count "one slot left" and both
-    write a different order row. FOR UPDATE on the restaurant row makes accepts for
-    the same restaurant queue up, so the second counts after the first committed.
-    Called by A inside F3 accept, after the order is locked (order → restaurant).
-    """
-    capacity = session.execute(
-        select(Restaurant.kitchen_capacity)
-        .where(Restaurant.id == restaurant_id)
-        .with_for_update()
-    ).scalar_one()
-    # Same status list as the partial index ix_orders_restaurant_active, so the
-    # count reads only that small index.
-    in_kitchen = session.execute(
-        select(func.count())
-        .select_from(Order)
-        .where(
-            Order.restaurant_id == restaurant_id,
-            Order.status.in_(ACTIVE_KITCHEN_STATUSES),
-        )
-    ).scalar_one()
-    if in_kitchen >= capacity:
-        raise Conflict("kitchen is at full capacity")
 
 
 def _check_owner(order: Order, actor_type: str, actor_id: int | None) -> None:
@@ -299,7 +277,8 @@ def cancel_order(
     Lock order: the order first (lock_order), then its stock rows (release_stock), the
     same order every flow uses. Two simultaneous cancels: the second waits for the
     lock, then sees `cancelled` and gets 409, so stock and refund happen once.
-    Pending offers are withdrawn, so no courier can accept a cancelled order.
+    Pending offers are withdrawn, so no courier can accept a cancelled order; their
+    ids are returned so their fd:offer keys are deleted after the commit.
     Ending a delivery a courier already accepted waits for the marker agreed with
     A in `deliveries` (step 6.4).
     """
@@ -307,12 +286,13 @@ def cancel_order(
     _check_owner(order, actor_type, actor_id)
     change_status(session, order, "cancelled", actor_type, actor_id, reason=reason)
     stock_after, day = release_and_refund(session, order)
-    session.execute(
+    withdrawn = session.scalars(
         update(DeliveryOffer)
         .where(DeliveryOffer.order_id == order.id, DeliveryOffer.outcome == "pending")
         .values(outcome="withdrawn")
-    )
-    return StatusChange(order, stock_after, day)
+        .returning(DeliveryOffer.id)
+    ).all()
+    return StatusChange(order, stock_after, day, withdrawn_offer_ids=list(withdrawn))
 
 
 def distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> Decimal:
@@ -360,4 +340,8 @@ def courier_step(
             float(order.delivery_lat),
             float(order.delivery_lng),
         )
+        # Read here, inside the transaction, so the ranking write after the commit
+        # does not need PostgreSQL.
+        city_id = session.get(Zone, rest.zone_id).city_id
+        return StatusChange(order, courier_id=courier_id, city_id=city_id)
     return StatusChange(order, courier_id=courier_id)

@@ -32,7 +32,7 @@ The API (FastAPI, sync) talks to the three. **Rule for every flow:** PostgreSQL 
 | F2 Place order | One transaction: checks, stock taken with a conditional `UPDATE`, order, lines, payment, history | — | After commit: stock copy, tracking hash |
 | F3 Restaurant accepts | Locks the restaurant row (rule 4), status `accepted`, offers inserted | — | Before commit: `GEOSEARCH` 3 km + online check. After commit: offer keys (`EX 45`), tracking hash |
 | F4 Courier accepts | Locks offer, order and courier (rules 1 and 3), inserts the delivery, closes the other offers | — | After commit: deletes closed offer keys, tracking hash gets the courier |
-| F5 Status updates | Status change + history row in one transaction; a cancel gives stock back and adds a refund | — | After commit: tracking hash, stock copy; on `delivered`, the ranking bucket (`record_delivery`, *to do: RodrigoDias123*) |
+| F5 Status updates | Status change + history row in one transaction; a cancel gives stock back, adds a refund and withdraws pending offers | — | After commit: tracking hash, stock copy, `DEL` of the withdrawn offer keys; on `delivered`, the ranking bucket (`record_delivery`, with the restaurant's city read in the transaction) |
 | F6 Track | Only on a cache miss, once | — | `HGETALL` the tracking hash, `GEOPOS` the courier |
 | F7 Location | `/online` checks the courier exists and is active | Each position appended to `courier_positions` | Lua script: `GEOADD` + `SET fd:courier:{id}:online EX 30` |
 | F8 Reports | Read by the export (`fd_readonly`) | Pipelines run on `report_orders` | — |

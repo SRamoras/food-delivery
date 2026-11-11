@@ -10,8 +10,8 @@ from sqlalchemy import (
     Integer,
     Numeric,
     SmallInteger,
-    String,
     Table,
+    Text,
     text,
 )
 from sqlalchemy.dialects.postgresql import INT4RANGE, Range
@@ -40,7 +40,7 @@ class Cuisine(Base):
     __tablename__ = "cuisines"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(50), unique=True)
+    name: Mapped[str] = mapped_column(Text, unique=True)
 
 
 class Restaurant(Base):
@@ -63,15 +63,15 @@ class Restaurant(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     zone_id: Mapped[int] = mapped_column(ForeignKey("zones.id", ondelete="RESTRICT"))
-    name: Mapped[str] = mapped_column(String(200))
+    name: Mapped[str] = mapped_column(Text)
     # Text, not a number: a NIF is an identifier and may start with 0.
-    nif: Mapped[str] = mapped_column(String(9), unique=True)
-    address: Mapped[str] = mapped_column(String(300))
+    nif: Mapped[str] = mapped_column(Text, unique=True)
+    address: Mapped[str] = mapped_column(Text)
     lat: Mapped[Decimal] = mapped_column(Numeric(9, 6))
     lng: Mapped[Decimal] = mapped_column(Numeric(9, 6))
     min_order_value: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     kitchen_capacity: Mapped[int] = mapped_column(Integer)
-    status: Mapped[str] = mapped_column(String(10), server_default=text("'closed'"))
+    status: Mapped[str] = mapped_column(Text, server_default=text("'closed'"))
 
 
 class OpeningPeriod(Base):

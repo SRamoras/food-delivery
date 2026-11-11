@@ -15,7 +15,9 @@ from sqlalchemy import text
 from app.config import LISBON
 from app.db.postgres import SessionLocal
 from app.db.redis import client
+from app.models.offers import OFFER_TTL_SECONDS
 from app.models.orders import Order
+from app.services.offers import offer_key
 from app.services.ranking import RANK_TTL_SECONDS, bucket_key, recent_deliveries
 from app.services.stock import stock_expire_at, stock_key
 from app.services.tracking import (
@@ -27,8 +29,41 @@ from app.services.tracking import (
 
 
 def rebuild_offers() -> int:
-    """A: fd:offer:{offer_id} for offers still pending in PG, with the remaining TTL."""
-    return 0
+    """A: fd:offer:{offer_id} for offers still pending in PG, with the remaining TTL.
+
+    Only offers younger than 45 s: older ones are invalid even if PG still says
+    `pending` (lazy expiry), so they must not come back. Each key gets the seconds it
+    has left, not a fresh 45, so a rebuild never makes an offer live longer.
+    """
+    with SessionLocal() as session:
+        rows = session.execute(
+            text("""
+                SELECT f.id, f.order_id, f.courier_id, o.restaurant_id,
+                       ceil(extract(epoch FROM f.sent_at + make_interval(secs => :ttl)
+                                               - now()))::int AS ttl_left
+                  FROM delivery_offers f
+                  JOIN orders o ON o.id = f.order_id
+                 WHERE f.outcome = 'pending'
+                   AND f.sent_at > now() - make_interval(secs => :ttl)
+            """),
+            {"ttl": OFFER_TTL_SECONDS},
+        ).all()
+    # HSET + EXPIRE in one MULTI per key, as the app writes them: never a key without TTL.
+    pipe = client.pipeline(transaction=True)
+    for offer_id, order_id, courier_id, restaurant_id, ttl_left in rows:
+        key = offer_key(offer_id)
+        pipe.delete(key)
+        pipe.hset(
+            key,
+            mapping={
+                "order_id": order_id,
+                "courier_id": courier_id,
+                "restaurant_id": restaurant_id,
+            },
+        )
+        pipe.expire(key, max(ttl_left, 1))
+    pipe.execute()
+    return len(rows)
 
 
 def rebuild_stock() -> int:

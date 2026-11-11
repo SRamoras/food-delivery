@@ -4,7 +4,9 @@ import logging
 from datetime import datetime
 
 from app.config import LISBON
+from app.services.courier_offers import delete_offer_keys
 from app.services.orders import PlacedOrder, StatusChange
+from app.services.ranking import record_delivery
 from app.services.stock import write_stock_copies
 from app.services.tracking import update_tracking
 
@@ -27,13 +29,20 @@ def after_order_placed(placed: PlacedOrder) -> None:
 
 
 def after_status_change(change: StatusChange) -> None:
-    """Update tracking and copy any stock a cancel gave back. PostgreSQL has committed.
+    """Update tracking, the ranking and any stock a cancel gave back. PG has committed.
 
-    Only today's stock key: yesterday's stock is never read again. The ranking call
-    on `delivered` (C's function) is added when it exists.
+    Only today's stock key: yesterday's stock is never read again.
     """
     order = change.order
     _track(order.id, order.customer_id, order.status, change.courier_id)
+    # A cancel withdrew these offers in PG; their keys would otherwise live up to 45 s.
+    delete_offer_keys(change.withdrawn_offer_ids)
+    if order.status == "delivered" and change.city_id is not None:
+        # Derived like the others: a failure is logged and rebuild.py fixes it.
+        try:
+            record_delivery(change.city_id, order.restaurant_id)
+        except Exception:
+            log.exception("fd:rank update failed for order %s", order.id)
     if not change.stock_after or change.stock_date != datetime.now(LISBON).date():
         return
     try:

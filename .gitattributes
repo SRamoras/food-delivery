@@ -1,0 +1,4 @@
+# Keep LF line endings in the working tree on every OS. A Windows checkout with
+# core.autocrlf=true would otherwise turn the shell scripts and .env.example into
+# CRLF, and bash cannot run them (setup.sh fails on the first line of _env.sh).
+* text=auto eol=lf

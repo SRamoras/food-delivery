@@ -9,7 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Numeric,
-    String,
+    Text,
     func,
     text,
 )
@@ -55,10 +55,10 @@ class Payment(Base):
         ForeignKey("orders.id", ondelete="RESTRICT"), index=True
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
-    method: Mapped[str] = mapped_column(String(10))
-    status: Mapped[str] = mapped_column(String(10))
+    method: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
     paid_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     # UNIQUE: a provider reference is never recorded twice. NULLs (cash) do not collide.
-    provider_ref: Mapped[str | None] = mapped_column(String(64), unique=True)
+    provider_ref: Mapped[str | None] = mapped_column(Text, unique=True)

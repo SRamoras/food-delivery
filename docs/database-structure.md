@@ -40,12 +40,12 @@ erDiagram
 
     cities {
         int id PK
-        varchar name UK
+        text name UK
     }
     zones {
         int id PK
         int city_id FK
-        varchar name "UNIQUE (city_id, name)"
+        text name "UNIQUE (city_id, name)"
     }
     zone_fees {
         int id PK
@@ -55,20 +55,20 @@ erDiagram
     }
     customers {
         int id PK
-        varchar name
-        varchar email UK
-        varchar phone UK
-        varchar password_hash
+        text name
+        text email UK
+        text phone UK
+        text password_hash
         timestamptz registered_at
     }
     customer_addresses {
         int id PK
         int customer_id FK
         int zone_id FK
-        varchar street
-        varchar number
-        varchar floor "nullable"
-        varchar postcode
+        text street
+        text number
+        text floor "nullable"
+        text postcode
         text notes "nullable"
         numeric lat
         numeric lng
@@ -76,19 +76,19 @@ erDiagram
     }
     cuisines {
         int id PK
-        varchar name UK
+        text name UK
     }
     restaurants {
         int id PK
         int zone_id FK
-        varchar name
-        varchar nif UK "CHECK 9 digits"
-        varchar address
+        text name
+        text nif UK "CHECK 9 digits"
+        text address
         numeric lat
         numeric lng
         numeric min_order_value "CHECK >= 0"
         int kitchen_capacity "CHECK > 0"
-        varchar status "open | closed | suspended"
+        text status "open | closed | suspended"
     }
     restaurant_cuisines {
         int restaurant_id PK, FK
@@ -103,15 +103,15 @@ erDiagram
     menu_categories {
         int id PK
         int restaurant_id FK
-        varchar name
+        text name
     }
     menu_items {
         int id PK
         int category_id FK
-        varchar name
+        text name
         text description "nullable"
         numeric price "CHECK >= 0"
-        varchar status "available | unavailable"
+        text status "available | unavailable"
         int daily_stock "configured portions, NULL = no limit"
         jsonb options
     }
@@ -126,9 +126,9 @@ erDiagram
         int restaurant_id FK
         int source_address_id FK "nullable"
         text delivery_street "address snapshot"
-        varchar delivery_number
-        varchar delivery_floor "nullable"
-        varchar delivery_postcode
+        text delivery_number
+        text delivery_floor "nullable"
+        text delivery_postcode
         int delivery_zone_id FK
         numeric delivery_lat
         numeric delivery_lng
@@ -137,9 +137,9 @@ erDiagram
         numeric delivery_fee "CHECK >= 0"
         numeric tip "CHECK >= 0"
         numeric total "CHECK = subtotal + fee + tip"
-        varchar status "placed .. delivered, cancelled, rejected"
-        varchar cancel_reason "fixed list, required if cancelled"
-        varchar cancelled_by "customer | restaurant | backoffice"
+        text status "placed .. delivered, cancelled, rejected"
+        text cancel_reason "fixed list, required if cancelled"
+        text cancelled_by "customer | restaurant | backoffice"
         timestamptz created_at
     }
     order_lines {
@@ -154,9 +154,9 @@ erDiagram
     order_status_history {
         int id PK
         int order_id FK
-        varchar old_status "NULL on creation"
-        varchar new_status
-        varchar actor_type
+        text old_status "NULL on creation"
+        text new_status
+        text actor_type
         int actor_id "nullable"
         timestamptz changed_at "append-only: no UPDATE/DELETE for fd_app"
     }
@@ -164,26 +164,26 @@ erDiagram
         int id PK
         int order_id FK
         numeric amount "CHECK >= 0"
-        varchar method "card | mbway | cash"
-        varchar status "approved | declined | refunded"
+        text method "card | mbway | cash"
+        text status "approved | declined | refunded"
         timestamptz paid_at
-        varchar provider_ref UK "NULL only for cash"
+        text provider_ref UK "NULL only for cash"
     }
     couriers {
         int id PK
-        varchar name
-        varchar email UK
-        varchar phone UK
-        varchar vehicle_type "bicycle 1 | scooter 2 | car 3 active deliveries"
-        varchar licence_plate UK "CHECK: NULL only for bicycle"
-        varchar status "active | blocked"
+        text name
+        text email UK
+        text phone UK
+        text vehicle_type "bicycle 1 | scooter 2 | car 3 active deliveries"
+        text licence_plate UK "CHECK: NULL only for bicycle"
+        text status "active | blocked"
     }
     delivery_offers {
         int id PK "planned"
         int order_id FK "UNIQUE with courier_id"
         int courier_id FK
         timestamptz sent_at "valid for 45 s"
-        varchar outcome "pending | accepted | rejected | expired | withdrawn"
+        text outcome "pending | accepted | rejected | expired | withdrawn"
     }
     deliveries {
         int id PK "planned"
