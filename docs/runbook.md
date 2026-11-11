@@ -2,8 +2,6 @@
 
 How the group would recover from losing each engine. PostgreSQL is the source of truth: MongoDB reports and Redis keys are rebuilt from it, so it is restored first.
 
-Sections still to be written by their owners are marked *(to do: name)*.
-
 ## PostgreSQL
 
 ### 1. What is backed up, how often, with which tool, where
