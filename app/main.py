@@ -9,7 +9,15 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import mongo, postgres, redis
 from app.errors import register_exception_handlers
-from app.routers import couriers, customers, offers, orders, restaurants, tracking
+from app.routers import (
+    backoffice,
+    couriers,
+    customers,
+    offers,
+    orders,
+    restaurants,
+    tracking,
+)
 
 app = FastAPI(title="Food delivery API")
 register_exception_handlers(app)
@@ -24,6 +32,7 @@ app.include_router(customers.router)
 app.include_router(offers.router)
 app.include_router(restaurants.router)
 app.include_router(tracking.router)
+app.include_router(backoffice.router)
 
 
 # `def`, not `async def`: FastAPI runs it in a thread pool, like every endpoint that

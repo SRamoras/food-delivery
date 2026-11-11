@@ -2,12 +2,13 @@
 
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import Row, Select, func, select
 
 from app.config import LISBON
 from app.db import redis
 from app.db.postgres import SessionLocal
 from app.errors import NotFound
+from app.models.offers import Delivery
 from app.models.orders import Order, OrderStatusHistory
 from app.schemas.tracking import CourierPosition, OrderTracking
 
@@ -16,8 +17,40 @@ TRACK_TTL_SECONDS = 86400
 COURIERS_GEO_KEY = "fd:couriers:geo"
 
 
-def _track_key(order_id: int) -> str:
+def track_key(order_id: int) -> str:
     return f"fd:order:{order_id}:track"
+
+
+def track_rows() -> Select:
+    """What the tracking hash holds, read from PG: one row per order.
+
+    Shared by the cache miss, redis/rebuild.py and redis/verify.py, so all three
+    agree on what the hash should contain.
+    """
+    last_change = (
+        select(func.max(OrderStatusHistory.changed_at))
+        .where(OrderStatusHistory.order_id == Order.id)
+        .scalar_subquery()
+    )
+    return select(
+        Order.id,
+        Order.customer_id,
+        Order.status,
+        Delivery.courier_id,
+        func.coalesce(last_change, Order.created_at).label("updated_at"),
+    ).outerjoin(Delivery, Delivery.order_id == Order.id)
+
+
+def track_fields(row: Row) -> dict[str, str]:
+    """A track_rows() row as the hash fields (Redis stores strings)."""
+    fields = {
+        "customer_id": str(row.customer_id),
+        "status": row.status,
+        "updated_at": row.updated_at.isoformat(),
+    }
+    if row.courier_id is not None:
+        fields["courier_id"] = str(row.courier_id)
+    return fields
 
 
 def update_tracking(
@@ -38,7 +71,7 @@ def update_tracking(
     if courier_id is not None:
         fields["courier_id"] = courier_id
 
-    key = _track_key(order_id)
+    key = track_key(order_id)
     pipe = redis.client.pipeline(transaction=True)
     pipe.hset(key, mapping=fields)
     pipe.expire(key, TRACK_TTL_SECONDS)
@@ -48,32 +81,17 @@ def update_tracking(
 def _fill_from_postgres(order_id: int) -> dict[str, str] | None:
     """On a cache miss, read the order once from PG and store it. None if it does not exist.
 
-    The courier is not filled here yet: it lives in A's deliveries table, which does not
-    exist so far. Until then it comes only from update_tracking.
+    The courier comes from A's deliveries table (outer join: no row until a courier
+    accepts).
     """
-    last_change = (
-        select(func.max(OrderStatusHistory.changed_at))
-        .where(OrderStatusHistory.order_id == Order.id)
-        .scalar_subquery()
-    )
     with SessionLocal() as session, session.begin():
-        row = session.execute(
-            select(
-                Order.customer_id,
-                Order.status,
-                func.coalesce(last_change, Order.created_at).label("updated_at"),
-            ).where(Order.id == order_id)
-        ).one_or_none()
+        row = session.execute(track_rows().where(Order.id == order_id)).one_or_none()
     if row is None:
         return None
 
-    fields = {
-        "customer_id": str(row.customer_id),
-        "status": row.status,
-        "updated_at": row.updated_at.isoformat(),
-    }
+    fields = track_fields(row)
     flat = [part for pair in fields.items() for part in pair]
-    redis.fill_tracking(keys=[_track_key(order_id)], args=[TRACK_TTL_SECONDS, *flat])
+    redis.fill_tracking(keys=[track_key(order_id)], args=[TRACK_TTL_SECONDS, *flat])
     return fields
 
 
@@ -86,7 +104,7 @@ def get_tracking(customer_id: int, order_id: int) -> OrderTracking:
     Raises:
         NotFound: the order does not exist or belongs to another customer.
     """
-    track = redis.client.hgetall(_track_key(order_id)) or _fill_from_postgres(order_id)
+    track = redis.client.hgetall(track_key(order_id)) or _fill_from_postgres(order_id)
     # Same answer for "not yours" and "does not exist", so ids cannot be probed.
     if track is None or int(track["customer_id"]) != customer_id:
         raise NotFound("Order not found")
