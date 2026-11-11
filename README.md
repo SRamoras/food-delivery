@@ -165,7 +165,7 @@ erDiagram
 
     cities {
         int id PK
-        varchar name UK
+        text name UK
     }
     zones {
         int id PK
@@ -179,8 +179,8 @@ erDiagram
     }
     customers {
         int id PK
-        varchar email UK
-        varchar phone UK
+        text email UK
+        text phone UK
     }
     customer_addresses {
         int id PK
@@ -191,14 +191,14 @@ erDiagram
     restaurants {
         int id PK
         int zone_id FK
-        varchar nif UK "CHECK 9 digits"
+        text nif UK "CHECK 9 digits"
         numeric min_order_value "CHECK >= 0"
         int kitchen_capacity "CHECK > 0 (rule 4)"
-        varchar status "open, closed, suspended"
+        text status "open, closed, suspended"
     }
     cuisines {
         int id PK
-        varchar name UK
+        text name UK
     }
     restaurant_cuisines {
         int restaurant_id PK, FK
@@ -233,7 +233,7 @@ erDiagram
         int source_address_id FK "address snapshot in the row"
         int delivery_zone_id FK
         numeric total "CHECK = subtotal + fee + tip"
-        varchar status "placed .. delivered, cancelled, rejected"
+        text status "placed .. delivered, cancelled, rejected"
     }
     order_lines {
         int id PK
@@ -250,21 +250,21 @@ erDiagram
     payments {
         int id PK
         int order_id FK
-        varchar provider_ref UK "NULL only for cash"
-        varchar status "approved, declined, refunded"
+        text provider_ref UK "NULL only for cash"
+        text status "approved, declined, refunded"
     }
     couriers {
         int id PK
-        varchar email UK
-        varchar phone UK
-        varchar licence_plate UK "NULL only for bicycle"
-        varchar vehicle_type "bicycle 1, scooter 2, car 3 (rule 3)"
+        text email UK
+        text phone UK
+        text licence_plate UK "NULL only for bicycle"
+        text vehicle_type "bicycle 1, scooter 2, car 3 (rule 3)"
     }
     delivery_offers {
         int id PK
         int order_id FK
         int courier_id FK
-        varchar outcome "pending, accepted, rejected, expired, withdrawn"
+        text outcome "pending, accepted, rejected, expired, withdrawn"
     }
     deliveries {
         int id PK
@@ -282,13 +282,49 @@ erDiagram
 
 ## API
 
-_To do: endpoints per flow (F1–F8) and how the actor is identified (`/customers/{id}/...`, `/restaurants/{id}/...`, `/couriers/{id}/...`, `/backoffice/...`)._ Full reference: <http://127.0.0.1:8000/docs>.
+Full reference, with request and response bodies: <http://127.0.0.1:8000/docs> (OpenAPI).
+
+**Who is acting.** There is no login: the actor's id is the first part of the path, with one prefix per kind of actor. `/customers/{customer_id}/...`, `/restaurants/{restaurant_id}/...` and `/couriers/{courier_id}/...` act as that customer, restaurant or courier; `/backoffice/...` has no id. An order, offer or delivery that does not belong to the actor in the path answers 404, as if it did not exist.
+
+**Status codes.** 201 created, 200 OK, 404 not found, 422 invalid input, 409 refused by a business rule (`{"detail": "<reason>"}`: no stock, already taken, kitchen full, no room on the vehicle, invalid transition, closed, below minimum, zone not delivered, payment declined). A business rule never answers 5xx.
+
+| Flow | Method and path | What it does |
+|---|---|---|
+| F1 Browse | `GET /customers/{customer_id}/addresses/{address_id}/restaurants` | Restaurants open now (Lisbon time) that deliver to the address, with fee and average rating |
+| F1 Browse | `GET /restaurants/{restaurant_id}/menu` | Categories, items and the options of each item |
+| F2 Place order | `POST /customers/{customer_id}/orders` | Place an order (`simulate: approved\|declined` for the payment); `?mode=naive` for the race demo |
+| F3 Restaurant | `POST /restaurants/{restaurant_id}/orders/{order_id}/accept` | Accept (kitchen capacity checked) and offer to up to 5 couriers within 3 km |
+| F3 Restaurant | `POST /restaurants/{restaurant_id}/orders/{order_id}/reject` | Reject a placed order: stock back, refund if paid online |
+| F3 Restaurant | `POST /restaurants/{restaurant_id}/orders/{order_id}/reoffer` | Offer an accepted order still without courier to the next couriers |
+| F3 Back office | `POST /backoffice/orders/{order_id}/reoffer` | The same, for any order |
+| F4 Courier | `POST /couriers/{courier_id}/offers/{offer_id}/accept` | Accept an offer: the first valid accept wins (vehicle limit checked); `?mode=naive` for the race demo |
+| F4 Courier | `POST /couriers/{courier_id}/offers/{offer_id}/reject` | Decline a pending offer |
+| F5 Restaurant | `POST /restaurants/{restaurant_id}/orders/{order_id}/preparing` | `accepted → preparing` |
+| F5 Restaurant | `POST /restaurants/{restaurant_id}/orders/{order_id}/ready` | `preparing → ready` |
+| F5 Courier | `POST /couriers/{courier_id}/deliveries/{order_id}/picked-up` | `ready → picked_up` |
+| F5 Courier | `POST /couriers/{courier_id}/deliveries/{order_id}/delivered` | `picked_up → delivered`; counts in the last-hour ranking |
+| F5 Cancel | `POST /customers/{customer_id}/orders/{order_id}/cancel` | Customer cancels before pickup, with a reason |
+| F5 Cancel | `POST /restaurants/{restaurant_id}/orders/{order_id}/cancel` | Restaurant cancels before pickup, with a reason |
+| F5 Cancel | `POST /backoffice/orders/{order_id}/cancel` | Back office cancels before pickup, with a reason |
+| F6 Track | `GET /customers/{customer_id}/orders/{order_id}/track` | Status and courier position; a repeated request reads only Redis |
+| F7 Location | `POST /couriers/{courier_id}/online` | Go online at a position |
+| F7 Location | `POST /couriers/{courier_id}/position` | Send a position; keeps the courier online for 30 s |
+| F7 Location | `POST /couriers/{courier_id}/offline` | Go offline |
+| F8 Reports | `GET /backoffice/reports/{report_name}` | Run a pipeline: `delivery-time`, `cancellations` or `restaurant-times` |
+| Ranking | `GET /backoffice/cities/{city_id}/ranking` | Top 20 restaurants by deliveries in the last hour, from Redis only |
+| — | `GET /health` | Ping the three databases |
 
 ## Extensions done
 
 - **Rule 3 test scenario (vehicle limit):** `tests/concurrency/vehicle_limit.py`, naive and real modes. Outputs in [docs/concurrency.md](docs/concurrency.md).
 
-_Others: to do._
+## Authors
+
+| Name | GitHub user | Git author email |
+|------|-------------|------------------|
+| Diogo Silva | SRamoras | 120826220+SRamoras@users.noreply.github.com |
+| Rodrigo Dias | RodrigoDias123 | rodrigo_dias@eticalgarve.com |
+| Cleber Fernandes | jcleberfernandes | cleberf64@gmail.com |
 
 ## Documentation
 
