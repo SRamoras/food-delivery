@@ -315,7 +315,36 @@ SELECT order_id, accepted_at, picked_up_at
 
 The same filter the rule 3 count uses in F4.
 
-*(to do: SRamoras, the plans without and with `ix_deliveries_courier_active` on the seeded deliveries, taken like queries 2 and 3: drop the index inside a transaction, `EXPLAIN (ANALYZE, BUFFERS)`, roll back, run it again.)*
+Taken with `postgres/sql/explain_deliveries.sql` (`-v courier=2807`) on the seeded data: 385,361 deliveries in 3,616 pages. The seed finished at 04:28 Lisbon time, with no order in progress, so the active deliveries come from the "vehicle limit" scenario run in real mode: courier 2807 is a scooter with 2 active deliveries, and only 3 deliveries in the whole table are active.
+
+**Without `ix_deliveries_courier_active`:**
+```
+ Gather  (cost=1000.00..6623.19 rows=1 width=20) (actual time=9.192..11.855 rows=2 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=3616
+   ->  Parallel Seq Scan on deliveries  (cost=0.00..5623.09 rows=1 width=20) (actual time=7.669..7.669 rows=1 loops=3)
+         Filter: ((delivered_at IS NULL) AND (courier_id = 2807))
+         Rows Removed by Filter: 128453
+         Buffers: shared hit=3616
+ Planning Time: 0.246 ms
+ Execution Time: 11.879 ms
+```
+
+**With it:**
+```
+ Index Scan using ix_deliveries_courier_active on deliveries  (cost=0.12..8.14 rows=1 width=20) (actual time=0.028..0.031 rows=2 loops=1)
+   Index Cond: (courier_id = 2807)
+   Buffers: shared hit=3
+ Planning Time: 0.123 ms
+ Execution Time: 0.038 ms
+```
+
+**Reading:**
+- **Without the index:** PostgreSQL reads every page of `deliveries` (3,616 buffers) and throws away 385k rows to keep 2. That cost grows with every delivery ever made, although the answer is always 0 to 3 rows.
+- **With it:** 3 buffers and no filter step: the index predicate `delivered_at IS NULL` already matches the query's, so the `Index Cond` only needs `courier_id`. About 300 times faster.
+- **Why partial:** a delivery leaves the index when it is delivered, so the index holds only the active ones. It is 16 kB, against 8.5 MB for the unique index on `order_id`, which holds every delivery. It stays that small however many deliveries the table keeps, and costs nothing on the writes of deliveries already finished.
+- **Rule 3:** F4 runs this same filter (with a join to skip cancelled orders) after locking the courier row, so the index also keeps the time the lock is held short.
 
 ## Foreign keys: indexed and not indexed
 
