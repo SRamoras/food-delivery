@@ -162,19 +162,70 @@ UPDATE delivery_offers SET outcome = 'withdrawn'
 - **Attack:** 50 `POST /couriers/{id}/offers/{offer_id}/accept`, fired together with `httpx.AsyncClient` and `asyncio.gather`. Keep-alive is off: after a 500, uvicorn closes the connection, and a reused one would fail in the client instead of counting the 500.
 - **Check:** the rule holds if the order has exactly 1 delivery and 1 `accepted` offer.
 
-These outputs were taken with a temporary runner that calls the scenario's `fixture`, `attack` and `check`. *(to do: SRamoras, take them again with the shared `tests/concurrency/run.py` when it exists.)*
+Taken with the shared runner on the seeded data, 3 runs per mode:
 
+**Real mode** (`uv run python tests/concurrency/run.py --scenario same-order --mode real`):
 ```
-scenario=same-order mode=real succeeded=1 refused=49 failed=0 rule_holds=True (deliveries=1 accepted_offers=1)
-scenario=same-order mode=real succeeded=1 refused=49 failed=0 rule_holds=True (deliveries=1 accepted_offers=1)
-scenario=same-order mode=real succeeded=1 refused=49 failed=0 rule_holds=True (deliveries=1 accepted_offers=1)
-scenario=same-order mode=naive succeeded=1 refused=10 failed=39 rule_holds=True (deliveries=1 accepted_offers=1)
-scenario=same-order mode=naive succeeded=1 refused=12 failed=37 rule_holds=True (deliveries=1 accepted_offers=1)
-scenario=same-order mode=naive succeeded=1 refused=10 failed=39 rule_holds=True (deliveries=1 accepted_offers=1)
+scenario:   same-order
+mode:       real
+requests:   50
+succeeded:  1 (2xx)
+refused:    49 (4xx)
+failed:     0 (5xx)
+rule holds: yes (deliveries=1 accepted_offers=1)
+exit code: 0
+
+scenario:   same-order
+mode:       real
+requests:   50
+succeeded:  1 (2xx)
+refused:    49 (4xx)
+failed:     0 (5xx)
+rule holds: yes (deliveries=1 accepted_offers=1)
+exit code: 0
+
+scenario:   same-order
+mode:       real
+requests:   50
+succeeded:  1 (2xx)
+refused:    49 (4xx)
+failed:     0 (5xx)
+rule holds: yes (deliveries=1 accepted_offers=1)
+exit code: 0
 ```
 
-- **Real:** 1 accepted, 49 × 409, no 5xx, one delivery.
-- **Naive:** 37–39 requests failed with 500 (`uq_deliveries_order_id` violations in the API log). The rest got 409 because they read the order after the winner committed. PostgreSQL still has one delivery: here the unique, not the app, kept the rule.
+**Naive mode** (`--mode naive`):
+```
+scenario:   same-order
+mode:       naive
+requests:   50
+succeeded:  1 (2xx)
+refused:    24 (4xx)
+failed:     25 (5xx)
+rule holds: yes (deliveries=1 accepted_offers=1)
+exit code: 0
+
+scenario:   same-order
+mode:       naive
+requests:   50
+succeeded:  1 (2xx)
+refused:    40 (4xx)
+failed:     9 (5xx)
+rule holds: yes (deliveries=1 accepted_offers=1)
+exit code: 0
+
+scenario:   same-order
+mode:       naive
+requests:   50
+succeeded:  1 (2xx)
+refused:    30 (4xx)
+failed:     19 (5xx)
+rule holds: yes (deliveries=1 accepted_offers=1)
+exit code: 0
+```
+
+- **Real:** 1 accepted, 49 × 409, no 5xx, one delivery, every time.
+- **Naive:** 9 to 25 requests failed with 500 (`uq_deliveries_order_id` violations in the API log). The rest got 409 because they read the order after the winner committed. How many fall on each side changes from run to run, because it depends on how the 50 requests interleave. PostgreSQL still has one delivery: here the unique, not the app, kept the rule. The runner exits 0 because the rule holds and, in naive mode, a 5xx is the race showing up rather than a failure of the test.
 
 ## Rule 3: vehicle limit (F4)
 
@@ -202,15 +253,66 @@ SELECT count(*) FROM deliveries d JOIN orders o ON o.id = d.order_id
 - **Attack:** the scooter accepts its 5 offers at the same time.
 - **Check:** the rule holds if the scooter has at most 2 active deliveries.
 
-Taken with the same temporary runner:
+Taken with the shared runner, 3 runs per mode:
 
+**Real mode** (`uv run python tests/concurrency/run.py --scenario vehicle-limit --mode real`):
 ```
-scenario=vehicle-limit mode=real succeeded=1 refused=4 failed=0 rule_holds=True (active_deliveries=2 limit=2)
-scenario=vehicle-limit mode=real succeeded=1 refused=4 failed=0 rule_holds=True (active_deliveries=2 limit=2)
-scenario=vehicle-limit mode=real succeeded=1 refused=4 failed=0 rule_holds=True (active_deliveries=2 limit=2)
-scenario=vehicle-limit mode=naive succeeded=5 refused=0 failed=0 rule_holds=False (active_deliveries=6 limit=2)
-scenario=vehicle-limit mode=naive succeeded=5 refused=0 failed=0 rule_holds=False (active_deliveries=6 limit=2)
-scenario=vehicle-limit mode=naive succeeded=5 refused=0 failed=0 rule_holds=False (active_deliveries=6 limit=2)
+scenario:   vehicle-limit
+mode:       real
+requests:   5
+succeeded:  1 (2xx)
+refused:    4 (4xx)
+failed:     0 (5xx)
+rule holds: yes (active_deliveries=2 limit=2)
+exit code: 0
+
+scenario:   vehicle-limit
+mode:       real
+requests:   5
+succeeded:  1 (2xx)
+refused:    4 (4xx)
+failed:     0 (5xx)
+rule holds: yes (active_deliveries=2 limit=2)
+exit code: 0
+
+scenario:   vehicle-limit
+mode:       real
+requests:   5
+succeeded:  1 (2xx)
+refused:    4 (4xx)
+failed:     0 (5xx)
+rule holds: yes (active_deliveries=2 limit=2)
+exit code: 0
+```
+
+**Naive mode** (`--mode naive`):
+```
+scenario:   vehicle-limit
+mode:       naive
+requests:   5
+succeeded:  5 (2xx)
+refused:    0 (4xx)
+failed:     0 (5xx)
+rule holds: NO (active_deliveries=6 limit=2)
+exit code: 1
+
+scenario:   vehicle-limit
+mode:       naive
+requests:   5
+succeeded:  5 (2xx)
+refused:    0 (4xx)
+failed:     0 (5xx)
+rule holds: NO (active_deliveries=6 limit=2)
+exit code: 1
+
+scenario:   vehicle-limit
+mode:       naive
+requests:   5
+succeeded:  5 (2xx)
+refused:    0 (4xx)
+failed:     0 (5xx)
+rule holds: NO (active_deliveries=6 limit=2)
+exit code: 1
 ```
 
 - **Real:** exactly one more delivery fits; the other 4 got 409; 2 active deliveries.
